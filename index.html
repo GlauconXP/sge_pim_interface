@@ -1,0 +1,95 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>SGE — Gestão Interna de Encomendas</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <section id="login" class="login-layout">
+    <div class="login-hero">
+      <div class="logo"><span>SGE</span><b>Gestão de Encomendas</b></div>
+      <div class="hero-text">
+        <small>UNIDADE DE DISTRIBUIÇÃO</small>
+        <h1>Controle interno de encomendas em um só lugar.</h1>
+        <p>Acompanhe recebimento, triagem, distribuição e entrega em uma interface simples para a equipe.</p>
+      </div>
+      <small>Protótipo acadêmico — PIM</small>
+    </div>
+    <div class="login-card-wrap">
+      <form id="loginForm" class="login-card">
+        <span class="tag">ACESSO RESTRITO</span>
+        <h2>Entrar no sistema</h2>
+        <p>Use sua matrícula de funcionário para continuar.</p>
+        <label>Matrícula<input id="user" required placeholder="Ex.: 001234"></label>
+        <label>Senha<input id="pass" type="password" required placeholder="Digite sua senha"></label>
+        <button class="btn primary" type="submit">Entrar</button>
+        <button class="link" type="button" id="demo">Entrar com usuário de demonstração</button>
+        <div id="loginError" class="error"></div>
+      </form>
+    </div>
+  </section>
+
+  <section id="app" class="app hidden">
+    <aside class="sidebar">
+      <div>
+        <div class="brand"><span class="logo-mini">SGE</span><div><b>Gestão Interna</b><small>Encomendas</small></div></div>
+        <nav>
+          <button class="nav active" data-page="dashboard">⌂ <span>Dashboard</span></button>
+          <button class="nav" data-page="encomendas">▣ <span>Encomendas</span></button>
+          <button class="nav" data-page="cadastro">＋ <span>Cadastrar encomenda</span></button>
+          <button class="nav" data-page="funcionarios">◉ <span>Funcionários</span></button>
+          <button class="nav" data-page="relatorios">▥ <span>Relatórios</span></button>
+        </nav>
+      </div>
+      <div>
+        <div class="user"><span>JS</span><div><b>João Silva</b><small>Funcionário</small></div></div>
+        <button class="nav" id="logout">↪ <span>Sair</span></button>
+      </div>
+    </aside>
+
+    <main>
+      <header class="topbar"><div><small>SISTEMA DE GESTÃO</small><h1 id="title">Dashboard</h1></div><span class="online">● Sistema online</span></header>
+
+      <section id="page-dashboard" class="page active">
+        <div class="page-head"><div><h2>Olá, João!</h2><p>Resumo das encomendas da unidade.</p></div><button class="btn primary" data-go="cadastro">＋ Nova encomenda</button></div>
+        <div class="stats">
+          <article><small>Recebidas</small><strong>128</strong><span>Últimas 24 horas</span></article>
+          <article><small>Em triagem</small><strong>32</strong><span>Precisam de processamento</span></article>
+          <article><small>Em rota</small><strong>81</strong><span>Com distribuição iniciada</span></article>
+          <article><small>Entregues</small><strong>129</strong><span>Concluídas hoje</span></article>
+        </div>
+        <div class="grid2">
+          <article class="card"><div class="card-head"><div><h3>Últimas encomendas</h3><p>Movimentações mais recentes</p></div><button class="link" data-go="encomendas">Ver todas →</button></div><div class="table-wrap"><table><thead><tr><th>Código</th><th>Destinatário</th><th>Destino</th><th>Status</th></tr></thead><tbody id="dashTable"></tbody></table></div></article>
+          <article class="card"><div class="card-head"><div><h3>Ações rápidas</h3><p>Funções mais usadas</p></div></div><button class="action" data-go="cadastro">＋ <span><b>Cadastrar encomenda</b><small>Adicionar um registro</small></span></button><button class="action" id="quickTrack">⌕ <span><b>Consultar encomenda</b><small>Ver histórico por código</small></span></button><button class="action" data-go="relatorios">▥ <span><b>Ver relatórios</b><small>Acompanhar indicadores</small></span></button></article>
+        </div>
+      </section>
+
+      <section id="page-encomendas" class="page">
+        <div class="page-head"><div><h2>Encomendas</h2><p>Consulte e gerencie os registros da unidade.</p></div><button class="btn primary" data-go="cadastro">＋ Nova encomenda</button></div>
+        <article class="card"><div class="filters"><input id="search" placeholder="Buscar por código, destinatário ou destino..."><select id="filter"><option>Todos</option><option>Recebida</option><option>Em triagem</option><option>Separada</option><option>Em distribuição</option><option>Entregue</option></select></div><div class="table-wrap"><table><thead><tr><th>Código</th><th>Destinatário</th><th>Destino</th><th>Status</th><th>Responsável</th><th>Ações</th></tr></thead><tbody id="ordersTable"></tbody></table></div></article>
+      </section>
+
+      <section id="page-cadastro" class="page">
+        <div class="page-head"><div><h2>Cadastrar encomenda</h2><p>Preencha os dados para adicionar um novo registro.</p></div></div>
+        <article class="card"><form id="packageForm" class="form"><div><label>Código<input name="code" required placeholder="BR123456789BR"></label><label>Tipo de envio<select name="type"><option>SEDEX</option><option>PAC</option><option>Mini Envios</option></select></label></div><div><label>Destinatário<input name="recipient" required></label><label>Endereço<input name="address" required></label></div><div><label>CEP<input name="cep" required placeholder="00000-000"></label><label>Bairro<input name="neighborhood" required></label></div><div><label>Cidade<input name="city" required value="São Paulo"></label><label>Status inicial<select name="status"><option>Recebida</option><option>Em triagem</option></select></label></div><div><label>Funcionário responsável<select id="owner" name="owner"></select></label><label>Prioridade<select name="priority"><option>Normal</option><option>Alta</option><option>Urgente</option></select></label></div><div class="form-actions"><button class="btn secondary" type="reset">Limpar</button><button class="btn primary" type="submit">Cadastrar encomenda</button></div><div id="success" class="success"></div></form></article>
+      </section>
+
+      <section id="page-funcionarios" class="page">
+        <div class="page-head"><div><h2>Funcionários</h2><p>Usuários autorizados a operar o sistema.</p></div><button class="btn primary" id="newEmployee">＋ Novo funcionário</button></div>
+        <article class="card"><div class="table-wrap"><table><thead><tr><th>Matrícula</th><th>Nome</th><th>Cargo</th><th>Setor</th><th>Status</th></tr></thead><tbody id="employeesTable"></tbody></table></div></article>
+      </section>
+
+      <section id="page-relatorios" class="page">
+        <div class="page-head"><div><h2>Relatórios</h2><p>Indicadores demonstrativos da operação.</p></div><button class="btn secondary" id="refresh">↻ Atualizar</button></div>
+        <div class="report-grid"><article class="card"><small>Taxa de entrega</small><strong id="delivery">86%</strong><span>Concluídas no período</span></article><article class="card"><small>Tempo médio de triagem</small><strong>2h 18min</strong><span>Estimativa operacional</span></article><article class="card"><small>Encomendas atrasadas</small><strong>5</strong><span>Precisam de atenção</span></article></div>
+        <article class="card"><div class="card-head"><div><h3>Distribuição por status</h3><p>Visualização simplificada</p></div></div><div class="bars"><label>Recebida <b>21%</b><i style="width:21%"></i></label><label>Em triagem <b>12%</b><i style="width:12%"></i></label><label>Em distribuição <b>31%</b><i style="width:31%"></i></label><label>Entregue <b>36%</b><i style="width:36%"></i></label></div></article>
+      </section>
+    </main>
+  </section>
+
+  <div id="modal" class="modal hidden"><div class="backdrop"></div><div class="modal-card"><button id="closeModal" class="close">×</button><small>CONSULTA DE ENCOMENDA</small><h3 id="modalCode"></h3><div id="modalBody"></div></div></div>
+  <script src="script.js"></script>
+</body>
+</html>
