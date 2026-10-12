@@ -518,7 +518,7 @@ static void listarEncomendas(struct mg_connection *c) {
 
     SQLCHAR sql[] =
         "SELECT TOP (100) e.Codigo, e.Destinatario, e.Cidade, e.Status, "
-        "COALESCE(f.Nome, N'—') AS Responsavel "
+        "f.Nome AS Responsavel "
         "FROM dbo.Encomendas AS e "
         "LEFT JOIN dbo.Funcionarios AS f ON f.Id = e.FuncionarioResponsavelId "
         "ORDER BY e.Id DESC";

@@ -38,7 +38,7 @@ async function carregarEncomendasDoBanco() {
     recipient: item.destinatario ?? "Não informado",
     destination: item.cidade ?? "Não informado",
     status: item.status ?? "Recebida",
-    owner: item.responsavel ?? "—",
+    owner: String(item.responsavel ?? "").trim() || "Sem responsável",
     date: "—",
     address: "",
     type: "—",

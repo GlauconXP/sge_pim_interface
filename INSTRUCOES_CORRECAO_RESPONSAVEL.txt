@@ -1,0 +1,13 @@
+CORREÇÃO DA EXIBIÇÃO DO FUNCIONÁRIO RESPONSÁVEL
+
+1. Pare o servidor C com Ctrl+C no terminal.
+2. Extraia este ZIP na raiz do projeto sge_pim_interface, substituindo os dois arquivos quando solicitado.
+3. No PowerShell, na raiz do projeto, compile o servidor:
+
+New-Item -ItemType Directory -Force .\build | Out-Null
+gcc -D_POSIX_C_SOURCE=200000L .\backend\src\server.c .\backend\third_party\mongoose\mongoose.c -I.\backend\third_party\mongoose -o .\build\sge_server.exe -lws2_32 -lodbc32
+
+4. Se não houver erros, inicie: .\build\sge_server.exe
+5. No navegador, pressione Ctrl+F5.
+
+O servidor deixa de enviar o travessão Unicode como substituto quando não há funcionário atribuído; em vez disso, envia o valor nulo/vazio e o JavaScript mostra a frase “Sem responsável”. Isso evita o texto corrompido “â€"”. A relação dos funcionários atribuídos não é alterada.
