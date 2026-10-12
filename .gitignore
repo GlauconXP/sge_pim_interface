@@ -1,0 +1,11 @@
+# Programas compilados e arquivos intermediários
+/build/*
+!/build/.gitkeep
+*.exe
+*.o
+*.obj
+
+# Configurações locais do editor
+.vscode/
+*.user
+*.log
