@@ -1,0 +1,27 @@
+SGE - arquivos corrigidos para integração do cadastro com o SQL Server
+
+CONTEÚDO
+- backend/server.c: rotas GET e POST da API /api/encomendas.
+- script.js: envia o formulário para a API e recarrega a lista do banco.
+
+COMO APLICAR
+1. Faça uma cópia de segurança dos arquivos atuais.
+2. Extraia este ZIP na pasta principal do projeto, mantendo a estrutura de pastas e permitindo substituir os arquivos:
+   - backend/server.c
+   - script.js
+3. Mantenha os arquivos que já existem no projeto, especialmente index.html, style.css e backend/mongoose/mongoose.c + mongoose.h.
+4. Abra o terminal do VS Code na pasta principal do projeto e compile com:
+   gcc -D_POSIX_C_SOURCE=200000L .\backend\server.c .\backend\mongoose\mongoose.c -I.\backend\mongoose -o .\backend\sge_server.exe -lws2_32 -lodbc32
+5. Execute:
+   .\backend\sge_server.exe
+6. Abra http://127.0.0.1:8000 no navegador. Não abra o index.html diretamente pelo Explorador de Arquivos.
+7. Cadastre uma encomenda de teste com um código novo. Depois confira no SQL Server:
+   SELECT Codigo, Destinatario, Cidade, Status
+   FROM dbo.Encomendas
+   ORDER BY Id DESC;
+
+OBSERVAÇÕES
+- O campo Funcionário responsável ainda é apenas da interface; não é gravado como funcionário relacionado na tabela.
+- O botão “Avançar” ainda altera o status somente na interface. A persistência dessa alteração é uma etapa separada.
+- A autenticação de login ainda é demonstrativa, não é autenticação real.
+- TrustServerCertificate=Yes está mantido apenas para o ambiente local de desenvolvimento; não deve ser adotado como configuração de produção sem avaliação.
