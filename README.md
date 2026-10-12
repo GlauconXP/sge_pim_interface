@@ -57,9 +57,11 @@ A conexão está configurada em `backend/src/server.c` para o servidor local `Gl
 
 - A consulta (`GET /api/encomendas`) lê as encomendas do SQL Server.
 - O cadastro (`POST /api/encomendas`) envia os dados do formulário para o servidor C e grava no SQL Server.
+- A atualização de status (`PUT /api/encomendas/status`) atualiza `Encomendas.Status` e inclui uma linha em `Movimentacoes` na mesma transação.
+- O histórico (`GET /api/encomendas/historico?codigo=...`) consulta as movimentações persistidas.
 - A tela de login é demonstrativa; ainda não verifica credenciais reais.
 - Funcionários responsáveis ainda são dados demonstrativos da interface e não são associados ao registro no banco.
-- O botão “Avançar” ainda altera o status apenas na interface; essa alteração não é salva no banco.
+- O modal de consulta lê as movimentações reais da API. Registros antigos podem não ter histórico se foram cadastrados antes desta funcionalidade.
 - Alguns indicadores e relatórios são demonstrativos e ainda não são calculados a partir do banco.
 
 ## Biblioteca Mongoose

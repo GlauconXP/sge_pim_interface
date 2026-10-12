@@ -1,0 +1,20 @@
+CORREÇÃO DO BOTÃO AVANÇAR — SGE
+
+Causa identificada:
+O ODBC retorna SQL_NO_DATA (código 100) quando o INSERT ... SELECT que tenta registrar o status anterior não insere nenhuma linha. Isso é normal quando a encomenda já tem histórico. O código anterior tratava esse resultado esperado como falha.
+
+Instalação:
+1. Pare o servidor com Ctrl+C.
+2. Extraia este ZIP na raiz do projeto sge_pim_interface.
+3. Substitua backend/src/server.c quando solicitado.
+4. Recompile na raiz do projeto usando PowerShell:
+
+New-Item -ItemType Directory -Force .\build | Out-Null
+gcc -D_POSIX_C_SOURCE=200000L .\backend\src\server.c .\backend\third_party\mongoose\mongoose.c -I.\backend\third_party\mongoose -o .\build\sge_server.exe -lws2_32 -lodbc32
+
+5. Inicie:
+.\build\sge_server.exe
+
+6. Atualize o navegador com Ctrl+F5 e teste Avançar uma vez.
+
+Este ZIP só contém o servidor C corrigido e estas instruções. A compilação e o teste com SQL Server devem ser confirmados no Windows local.

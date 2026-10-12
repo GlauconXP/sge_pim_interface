@@ -19,7 +19,9 @@ static void mostrarErro(SQLSMALLINT tipo, SQLHANDLE handle) {
         tipo, handle, 1, estado, &codigo,
         mensagem, sizeof(mensagem), &tamanho
     ))) {
-        printf("Erro ODBC: %s\n", mensagem);
+        printf("Erro ODBC [%s, codigo %ld]: %s\n",
+               estado, (long) codigo, mensagem);
+        fflush(stdout);
     }
 }
 
@@ -238,7 +240,8 @@ static void cadastrarEncomenda(
     struct mg_http_message *requisicao
 ) {
     SQLHSTMT consulta = SQL_NULL_HSTMT;
-
+    SQLRETURN resultado;
+    int transacaoAtiva = 0;
     SQLWCHAR codigo[64];
     SQLWCHAR destinatario[201];
     SQLWCHAR endereco[401];
@@ -248,7 +251,6 @@ static void cadastrarEncomenda(
     SQLWCHAR tipo[61];
     SQLWCHAR status[61];
     SQLWCHAR prioridade[41];
-
     struct mg_str corpo = requisicao->body;
 
     int valido =
@@ -262,54 +264,50 @@ static void cadastrarEncomenda(
         converterCampoJson(corpo, "$.status", status, 61) &&
         converterCampoJson(corpo, "$.priority", prioridade, 41);
 
-    if (!valido) {
+    if (!valido || codigo[0] == 0) {
         mg_http_reply(
-            c, 400,
-            "Content-Type: application/json\r\n",
+            c, 400, "Content-Type: application/json; charset=utf-8\r\n",
             "{\"erro\":\"Preencha corretamente todos os campos.\"}\n"
         );
         return;
     }
 
-    if (!SQL_SUCCEEDED(SQLAllocHandle(
-        SQL_HANDLE_STMT, conexao, &consulta
-    ))) {
+    resultado = SQLSetConnectAttr(
+        conexao, SQL_ATTR_AUTOCOMMIT,
+        (SQLPOINTER) SQL_AUTOCOMMIT_OFF, 0
+    );
+    if (!SQL_SUCCEEDED(resultado)) {
+        mostrarErro(SQL_HANDLE_DBC, conexao);
         mg_http_reply(
-            c, 500,
-            "Content-Type: application/json\r\n",
-            "{\"erro\":\"Falha ao preparar o cadastro.\"}\n"
+            c, 500, "Content-Type: application/json; charset=utf-8\r\n",
+            "{\"erro\":\"Não foi possível iniciar a transação no banco.\"}\n"
         );
         return;
     }
+    transacaoAtiva = 1;
 
-    SQLCHAR sql[] =
-        "INSERT INTO dbo.Encomendas "
-        "(Codigo, Destinatario, Endereco, CEP, Bairro, "
-        "Cidade, TipoEnvio, Status, Prioridade) "
-        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)";
+    resultado = SQLAllocHandle(SQL_HANDLE_STMT, conexao, &consulta);
+    if (!SQL_SUCCEEDED(resultado)) goto erro_sql_cadastro;
 
-    SQLRETURN resultado = SQLPrepare(
-        consulta, sql, SQL_NTS
-    );
-
-    if (!SQL_SUCCEEDED(resultado)) {
-        goto erro_sql;
+    {
+        SQLCHAR sql[] =
+            "INSERT INTO dbo.Encomendas "
+            "(Codigo, Destinatario, Endereco, CEP, Bairro, "
+            "Cidade, TipoEnvio, Status, Prioridade) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)";
+        resultado = SQLPrepare(consulta, sql, SQL_NTS);
     }
+    if (!SQL_SUCCEEDED(resultado)) goto erro_sql_cadastro;
 
     SQLWCHAR *valores[] = {
         codigo, destinatario, endereco, cep, bairro,
         cidade, tipo, status, prioridade
     };
-
-    SQLULEN tamanhosColuna[] = {
-        30, 100, 200, 9, 80, 80, 30, 30, 20
-    };
-
+    SQLULEN tamanhosColuna[] = {30, 100, 200, 9, 80, 80, 30, 30, 20};
     SQLLEN comprimentos[9];
 
     for (int i = 0; i < 9; i++) {
         comprimentos[i] = SQL_NTS;
-
         resultado = SQLBindParameter(
             consulta,
             (SQLUSMALLINT)(i + 1),
@@ -320,52 +318,94 @@ static void cadastrarEncomenda(
             0,
             valores[i],
             (SQLLEN)(
-                (i == 0 ? sizeof(codigo) :
-                 i == 1 ? sizeof(destinatario) :
-                 i == 2 ? sizeof(endereco) :
-                 i == 3 ? sizeof(cep) :
-                 i == 4 ? sizeof(bairro) :
-                 i == 5 ? sizeof(cidade) :
-                 i == 6 ? sizeof(tipo) :
-                 i == 7 ? sizeof(status) :
-                          sizeof(prioridade))
+                i == 0 ? sizeof(codigo) :
+                i == 1 ? sizeof(destinatario) :
+                i == 2 ? sizeof(endereco) :
+                i == 3 ? sizeof(cep) :
+                i == 4 ? sizeof(bairro) :
+                i == 5 ? sizeof(cidade) :
+                i == 6 ? sizeof(tipo) :
+                i == 7 ? sizeof(status) : sizeof(prioridade)
             ),
             &comprimentos[i]
         );
-
-        if (!SQL_SUCCEEDED(resultado)) {
-            goto erro_sql;
-        }
+        if (!SQL_SUCCEEDED(resultado)) goto erro_sql_cadastro;
     }
 
     resultado = SQLExecute(consulta);
-
-    if (!SQL_SUCCEEDED(resultado)) {
-        goto erro_sql;
-    }
-
+    if (!SQL_SUCCEEDED(resultado)) goto erro_sql_cadastro;
     SQLFreeHandle(SQL_HANDLE_STMT, consulta);
+    consulta = SQL_NULL_HSTMT;
+
+    /* Registra o status inicial sem deixar encomenda e histórico desencontrados. */
+    resultado = SQLAllocHandle(SQL_HANDLE_STMT, conexao, &consulta);
+    if (!SQL_SUCCEEDED(resultado)) goto erro_sql_cadastro;
+
+    {
+        SQLCHAR sql[] =
+            "INSERT INTO dbo.Movimentacoes (EncomendaId, Status, Observacao) "
+            "SELECT Id, ?, N'Encomenda cadastrada no sistema' "
+            "FROM dbo.Encomendas WHERE Codigo = ?";
+        resultado = SQLPrepare(consulta, sql, SQL_NTS);
+    }
+    if (!SQL_SUCCEEDED(resultado)) goto erro_sql_cadastro;
+
+    SQLLEN tamanhoStatusMov = SQL_NTS;
+    SQLLEN tamanhoCodigoMov = SQL_NTS;
+    resultado = SQLBindParameter(
+        consulta, 1, SQL_PARAM_INPUT, SQL_C_WCHAR, SQL_WVARCHAR,
+        30, 0, status, sizeof(status), &tamanhoStatusMov
+    );
+    if (!SQL_SUCCEEDED(resultado)) goto erro_sql_cadastro;
+    resultado = SQLBindParameter(
+        consulta, 2, SQL_PARAM_INPUT, SQL_C_WCHAR, SQL_WVARCHAR,
+        30, 0, codigo, sizeof(codigo), &tamanhoCodigoMov
+    );
+    if (!SQL_SUCCEEDED(resultado)) goto erro_sql_cadastro;
+
+    resultado = SQLExecute(consulta);
+    if (!SQL_SUCCEEDED(resultado)) goto erro_sql_cadastro;
+    SQLFreeHandle(SQL_HANDLE_STMT, consulta);
+    consulta = SQL_NULL_HSTMT;
+
+    resultado = SQLEndTran(SQL_HANDLE_DBC, conexao, SQL_COMMIT);
+    if (!SQL_SUCCEEDED(resultado)) goto erro_sql_cadastro;
+    transacaoAtiva = 0;
+
+    resultado = SQLSetConnectAttr(
+        conexao, SQL_ATTR_AUTOCOMMIT,
+        (SQLPOINTER) SQL_AUTOCOMMIT_ON, 0
+    );
+    if (!SQL_SUCCEEDED(resultado)) mostrarErro(SQL_HANDLE_DBC, conexao);
 
     mg_http_reply(
-        c, 201,
-        "Content-Type: application/json; charset=utf-8\r\n",
+        c, 201, "Content-Type: application/json; charset=utf-8\r\n",
         "{\"mensagem\":\"Encomenda cadastrada com sucesso.\"}\n"
     );
-
     return;
 
-erro_sql:
-    mostrarErro(SQL_HANDLE_STMT, consulta);
-
-    SQLFreeHandle(SQL_HANDLE_STMT, consulta);
-
+erro_sql_cadastro:
+    if (consulta != SQL_NULL_HSTMT) {
+        mostrarErro(SQL_HANDLE_STMT, consulta);
+        SQLFreeHandle(SQL_HANDLE_STMT, consulta);
+        consulta = SQL_NULL_HSTMT;
+    } else {
+        mostrarErro(SQL_HANDLE_DBC, conexao);
+    }
+    if (transacaoAtiva) {
+        SQLRETURN rollback = SQLEndTran(SQL_HANDLE_DBC, conexao, SQL_ROLLBACK);
+        if (!SQL_SUCCEEDED(rollback)) mostrarErro(SQL_HANDLE_DBC, conexao);
+    }
+    SQLSetConnectAttr(
+        conexao, SQL_ATTR_AUTOCOMMIT,
+        (SQLPOINTER) SQL_AUTOCOMMIT_ON, 0
+    );
     mg_http_reply(
-        c, 400,
-        "Content-Type: application/json; charset=utf-8\r\n",
-        "{\"erro\":\"Cadastro nao realizado. Verifique se o codigo "
-        "ja existe e se os dados sao validos.\"}\n"
+        c, 400, "Content-Type: application/json; charset=utf-8\r\n",
+        "{\"erro\":\"Cadastro não realizado. Verifique se o código já existe e se os dados são válidos.\"}\n"
     );
 }
+
 static void listarEncomendas(struct mg_connection *c) {
     SQLHSTMT consulta = SQL_NULL_HSTMT;
     SQLRETURN resultado;
@@ -509,6 +549,365 @@ static void listarEncomendas(struct mg_connection *c) {
     );
 }
 
+
+/* Valida os status que o sistema permite registrar. */
+static int statusPermitido(const char *status) {
+    const char *permitidos[] = {
+        "Recebida", "Em triagem", "Separada",
+        "Em distribuição", "Entregue"
+    };
+
+    for (size_t i = 0; i < sizeof(permitidos) / sizeof(permitidos[0]); i++) {
+        if (strcmp(status, permitidos[i]) == 0) {
+            return 1;
+        }
+    }
+    return 0;
+}
+
+/* Atualiza o status e grava uma movimentação na mesma transação. */
+static void atualizarStatusEncomenda(
+    struct mg_connection *c,
+    struct mg_http_message *requisicao
+) {
+    SQLHSTMT consulta = SQL_NULL_HSTMT;
+    SQLRETURN resultado;
+    SQLLEN linhasAfetadas = -1;
+    int transacaoAtiva = 0;
+    const char *etapa = "validar os dados da requisição";
+    SQLWCHAR codigo[64] = {0};
+    SQLWCHAR status[61] = {0};
+    SQLLEN tamanhoCodigo = SQL_NTS;
+    SQLLEN tamanhoStatus = SQL_NTS;
+    struct mg_str corpo = requisicao->body;
+    char *statusTexto = mg_json_get_str(corpo, "$.status");
+
+    if (statusTexto == NULL || !statusPermitido(statusTexto)) {
+        if (statusTexto != NULL) mg_free(statusTexto);
+        mg_http_reply(
+            c, 400, "Content-Type: application/json; charset=utf-8\r\n",
+            "{\"erro\":\"Status ausente ou inválido.\"}\n"
+        );
+        return;
+    }
+    mg_free(statusTexto);
+
+    if (!converterCampoJson(corpo, "$.code", codigo, 64) || codigo[0] == 0 ||
+        !converterCampoJson(corpo, "$.status", status, 61)) {
+        mg_http_reply(
+            c, 400, "Content-Type: application/json; charset=utf-8\r\n",
+            "{\"erro\":\"Informe o código da encomenda e o status.\"}\n"
+        );
+        return;
+    }
+
+    etapa = "iniciar a transação SQL";
+    resultado = SQLSetConnectAttr(
+        conexao, SQL_ATTR_AUTOCOMMIT,
+        (SQLPOINTER) SQL_AUTOCOMMIT_OFF, 0
+    );
+    if (!SQL_SUCCEEDED(resultado)) {
+        mostrarErro(SQL_HANDLE_DBC, conexao);
+        mg_http_reply(
+            c, 500, "Content-Type: application/json; charset=utf-8\r\n",
+            "{\"erro\":\"Não foi possível iniciar a transação no banco.\"}\n"
+        );
+        return;
+    }
+    transacaoAtiva = 1;
+
+    /* Para encomendas antigas sem histórico, guarda o status anterior antes da atualização. */
+    etapa = "preparar o registro do status anterior";
+    resultado = SQLAllocHandle(SQL_HANDLE_STMT, conexao, &consulta);
+    if (!SQL_SUCCEEDED(resultado)) goto erro_sql_status;
+    {
+        SQLCHAR sql[] =
+            "INSERT INTO dbo.Movimentacoes (EncomendaId, Status, Observacao) "
+            "SELECT e.Id, e.Status, N'Status anterior registrado ao habilitar o histórico' "
+            "FROM dbo.Encomendas AS e WHERE e.Codigo = ? "
+            "AND NOT EXISTS (SELECT 1 FROM dbo.Movimentacoes AS m WHERE m.EncomendaId = e.Id)";
+        etapa = "preparar o SQL do status anterior";
+        resultado = SQLPrepare(consulta, sql, SQL_NTS);
+    }
+    if (!SQL_SUCCEEDED(resultado)) goto erro_sql_status;
+    etapa = "vincular o código para registrar o status anterior";
+    resultado = SQLBindParameter(
+        consulta, 1, SQL_PARAM_INPUT, SQL_C_WCHAR, SQL_WVARCHAR,
+        30, 0, codigo, sizeof(codigo), &tamanhoCodigo
+    );
+    if (!SQL_SUCCEEDED(resultado)) goto erro_sql_status;
+    etapa = "executar o registro do status anterior";
+    resultado = SQLExecute(consulta);
+    /* SQL_NO_DATA (100) é esperado quando a encomenda já tem histórico:
+       o INSERT ... SELECT não encontrou uma linha nova para registrar. */
+    if (!SQL_SUCCEEDED(resultado) && resultado != SQL_NO_DATA) {
+        goto erro_sql_status;
+    }
+    SQLFreeHandle(SQL_HANDLE_STMT, consulta);
+    consulta = SQL_NULL_HSTMT;
+
+    etapa = "preparar a atualização da encomenda";
+    resultado = SQLAllocHandle(SQL_HANDLE_STMT, conexao, &consulta);
+    if (!SQL_SUCCEEDED(resultado)) goto erro_sql_status;
+
+    {
+        SQLCHAR sql[] =
+            "UPDATE dbo.Encomendas SET Status = ? WHERE Codigo = ?";
+        etapa = "preparar o comando UPDATE";
+        resultado = SQLPrepare(consulta, sql, SQL_NTS);
+        if (!SQL_SUCCEEDED(resultado)) goto erro_sql_status;
+    }
+
+    etapa = "vincular o novo status ao UPDATE";
+    resultado = SQLBindParameter(
+        consulta, 1, SQL_PARAM_INPUT, SQL_C_WCHAR, SQL_WVARCHAR,
+        30, 0, status, sizeof(status), &tamanhoStatus
+    );
+    if (!SQL_SUCCEEDED(resultado)) goto erro_sql_status;
+
+    etapa = "vincular o código ao UPDATE";
+    resultado = SQLBindParameter(
+        consulta, 2, SQL_PARAM_INPUT, SQL_C_WCHAR, SQL_WVARCHAR,
+        30, 0, codigo, sizeof(codigo), &tamanhoCodigo
+    );
+    if (!SQL_SUCCEEDED(resultado)) goto erro_sql_status;
+
+    etapa = "executar o UPDATE da encomenda";
+    resultado = SQLExecute(consulta);
+    if (!SQL_SUCCEEDED(resultado)) goto erro_sql_status;
+
+    etapa = "verificar quantas encomendas foram atualizadas";
+    resultado = SQLRowCount(consulta, &linhasAfetadas);
+    if (!SQL_SUCCEEDED(resultado)) goto erro_sql_status;
+
+    /* Alguns drivers ODBC retornam -1 quando a contagem de linhas é desconhecida.
+       Isso, isoladamente, não significa que o UPDATE falhou.
+       Só tratamos zero como encomenda não encontrada. */
+    if (linhasAfetadas == 0) goto encomenda_nao_encontrada;
+
+    SQLFreeHandle(SQL_HANDLE_STMT, consulta);
+    consulta = SQL_NULL_HSTMT;
+
+    etapa = "preparar o registro da nova movimentação";
+    resultado = SQLAllocHandle(SQL_HANDLE_STMT, conexao, &consulta);
+    if (!SQL_SUCCEEDED(resultado)) goto erro_sql_status;
+
+    {
+        SQLCHAR sql[] =
+            "INSERT INTO dbo.Movimentacoes (EncomendaId, Status, Observacao) "
+            "SELECT Id, ?, N'Status atualizado pela interface web' "
+            "FROM dbo.Encomendas WHERE Codigo = ?";
+        etapa = "preparar o INSERT da nova movimentação";
+        resultado = SQLPrepare(consulta, sql, SQL_NTS);
+        if (!SQL_SUCCEEDED(resultado)) goto erro_sql_status;
+    }
+
+    etapa = "vincular o status à nova movimentação";
+    resultado = SQLBindParameter(
+        consulta, 1, SQL_PARAM_INPUT, SQL_C_WCHAR, SQL_WVARCHAR,
+        30, 0, status, sizeof(status), &tamanhoStatus
+    );
+    if (!SQL_SUCCEEDED(resultado)) goto erro_sql_status;
+
+    etapa = "vincular o código à nova movimentação";
+    resultado = SQLBindParameter(
+        consulta, 2, SQL_PARAM_INPUT, SQL_C_WCHAR, SQL_WVARCHAR,
+        30, 0, codigo, sizeof(codigo), &tamanhoCodigo
+    );
+    if (!SQL_SUCCEEDED(resultado)) goto erro_sql_status;
+
+    etapa = "executar o INSERT da nova movimentação";
+    resultado = SQLExecute(consulta);
+    if (!SQL_SUCCEEDED(resultado)) goto erro_sql_status;
+
+    SQLFreeHandle(SQL_HANDLE_STMT, consulta);
+    consulta = SQL_NULL_HSTMT;
+
+    etapa = "confirmar a transação no SQL Server";
+    resultado = SQLEndTran(SQL_HANDLE_DBC, conexao, SQL_COMMIT);
+    if (!SQL_SUCCEEDED(resultado)) goto erro_sql_status;
+    transacaoAtiva = 0;
+
+    resultado = SQLSetConnectAttr(
+        conexao, SQL_ATTR_AUTOCOMMIT,
+        (SQLPOINTER) SQL_AUTOCOMMIT_ON, 0
+    );
+    if (!SQL_SUCCEEDED(resultado)) mostrarErro(SQL_HANDLE_DBC, conexao);
+
+    mg_http_reply(
+        c, 200, "Content-Type: application/json; charset=utf-8\r\n",
+        "{\"mensagem\":\"Status atualizado e movimentação registrada.\"}\n"
+    );
+    return;
+
+encomenda_nao_encontrada:
+    if (consulta != SQL_NULL_HSTMT) {
+        SQLFreeHandle(SQL_HANDLE_STMT, consulta);
+        consulta = SQL_NULL_HSTMT;
+    }
+    SQLEndTran(SQL_HANDLE_DBC, conexao, SQL_ROLLBACK);
+    transacaoAtiva = 0;
+    SQLSetConnectAttr(
+        conexao, SQL_ATTR_AUTOCOMMIT,
+        (SQLPOINTER) SQL_AUTOCOMMIT_ON, 0
+    );
+    mg_http_reply(
+        c, 404, "Content-Type: application/json; charset=utf-8\r\n",
+        "{\"erro\":\"Encomenda não encontrada.\"}\n"
+    );
+    return;
+
+erro_sql_status:
+    fprintf(stderr, "\n[SGE] Falha ao avancar encomenda na etapa: %s (retorno ODBC %d).\n",
+            etapa, (int) resultado);
+    fflush(stderr);
+    if (consulta != SQL_NULL_HSTMT) {
+        mostrarErro(SQL_HANDLE_STMT, consulta);
+        SQLFreeHandle(SQL_HANDLE_STMT, consulta);
+        consulta = SQL_NULL_HSTMT;
+    } else {
+        mostrarErro(SQL_HANDLE_DBC, conexao);
+    }
+    if (transacaoAtiva) {
+        SQLRETURN rollback = SQLEndTran(SQL_HANDLE_DBC, conexao, SQL_ROLLBACK);
+        if (!SQL_SUCCEEDED(rollback)) mostrarErro(SQL_HANDLE_DBC, conexao);
+    }
+    SQLSetConnectAttr(
+        conexao, SQL_ATTR_AUTOCOMMIT,
+        (SQLPOINTER) SQL_AUTOCOMMIT_ON, 0
+    );
+    mg_http_reply(
+        c, 500, "Content-Type: application/json; charset=utf-8\r\n",
+        "{\"erro\":\"Falha na etapa: %s. Confira o terminal para o detalhe ODBC.\"}\n",
+        etapa
+    );
+}
+
+/* Retorna as movimentações persistidas para uma encomenda. */
+static void listarHistoricoEncomenda(
+    struct mg_connection *c,
+    struct mg_http_message *requisicao
+) {
+    SQLHSTMT consulta = SQL_NULL_HSTMT;
+    SQLRETURN resultado;
+    char codigoUtf8[128] = {0};
+    SQLWCHAR codigo[128] = {0};
+    SQLLEN tamanhoCodigo = SQL_NTS;
+    SQLCHAR status[128] = {0};
+    SQLCHAR dataHora[64] = {0};
+    SQLCHAR observacao[512] = {0};
+    char json[32768] = {0};
+    size_t posicao = 0;
+    int primeira = 1;
+    int valido;
+
+    if (mg_http_get_var(
+        &requisicao->query, "codigo", codigoUtf8, sizeof(codigoUtf8)
+    ) <= 0 || codigoUtf8[0] == '\0') {
+        mg_http_reply(
+            c, 400, "Content-Type: application/json; charset=utf-8\r\n",
+            "{\"erro\":\"Informe o código da encomenda na consulta.\"}\n"
+        );
+        return;
+    }
+
+    if (MultiByteToWideChar(
+        CP_UTF8, 0, codigoUtf8, -1, (LPWSTR) codigo,
+        (int) (sizeof(codigo) / sizeof(codigo[0]))
+    ) <= 0) {
+        mg_http_reply(
+            c, 400, "Content-Type: application/json; charset=utf-8\r\n",
+            "{\"erro\":\"O código informado é inválido.\"}\n"
+        );
+        return;
+    }
+
+    resultado = SQLAllocHandle(SQL_HANDLE_STMT, conexao, &consulta);
+    if (!SQL_SUCCEEDED(resultado)) {
+        mostrarErro(SQL_HANDLE_DBC, conexao);
+        mg_http_reply(
+            c, 500, "Content-Type: application/json; charset=utf-8\r\n",
+            "{\"erro\":\"Falha ao consultar o histórico.\"}\n"
+        );
+        return;
+    }
+
+    {
+        SQLCHAR sql[] =
+            "SELECT m.Status, CONVERT(nvarchar(19), m.DataHora, 120), "
+            "COALESCE(m.Observacao, N'') "
+            "FROM dbo.Movimentacoes AS m "
+            "INNER JOIN dbo.Encomendas AS e ON e.Id = m.EncomendaId "
+            "WHERE e.Codigo = ? ORDER BY m.DataHora ASC, m.Id ASC";
+        resultado = SQLPrepare(consulta, sql, SQL_NTS);
+    }
+    if (!SQL_SUCCEEDED(resultado)) goto erro_historico;
+
+    resultado = SQLBindParameter(
+        consulta, 1, SQL_PARAM_INPUT, SQL_C_WCHAR, SQL_WVARCHAR,
+        30, 0, codigo, sizeof(codigo), &tamanhoCodigo
+    );
+    if (!SQL_SUCCEEDED(resultado)) goto erro_historico;
+
+    resultado = SQLExecute(consulta);
+    if (!SQL_SUCCEEDED(resultado)) goto erro_historico;
+
+    valido = adicionarTexto(json, sizeof(json), &posicao, "[");
+    while (valido) {
+        resultado = SQLFetch(consulta);
+        if (resultado == SQL_NO_DATA) break;
+        if (!SQL_SUCCEEDED(resultado)) {
+            mostrarErro(SQL_HANDLE_STMT, consulta);
+            valido = 0;
+            break;
+        }
+
+        if (!lerColuna(consulta, 1, status, sizeof(status)) ||
+            !lerColuna(consulta, 2, dataHora, sizeof(dataHora)) ||
+            !lerColuna(consulta, 3, observacao, sizeof(observacao))) {
+            valido = 0;
+            break;
+        }
+
+        if (!primeira) valido = adicionarTexto(json, sizeof(json), &posicao, ",");
+        if (!valido) break;
+
+        valido = adicionarTexto(json, sizeof(json), &posicao, "{\"status\":");
+        if (valido) valido = adicionarJson(json, sizeof(json), &posicao, (char *) status);
+        if (valido) valido = adicionarTexto(json, sizeof(json), &posicao, ",\"dataHora\":");
+        if (valido) valido = adicionarJson(json, sizeof(json), &posicao, (char *) dataHora);
+        if (valido) valido = adicionarTexto(json, sizeof(json), &posicao, ",\"observacao\":");
+        if (valido) valido = adicionarJson(json, sizeof(json), &posicao, (char *) observacao);
+        if (valido) valido = adicionarTexto(json, sizeof(json), &posicao, "}");
+        primeira = 0;
+    }
+
+    if (valido) valido = adicionarTexto(json, sizeof(json), &posicao, "]");
+    SQLFreeHandle(SQL_HANDLE_STMT, consulta);
+
+    if (!valido) {
+        mg_http_reply(
+            c, 500, "Content-Type: application/json; charset=utf-8\r\n",
+            "{\"erro\":\"Não foi possível montar o histórico.\"}\n"
+        );
+        return;
+    }
+
+    mg_http_reply(
+        c, 200, "Content-Type: application/json; charset=utf-8\r\n",
+        "%s\n", json
+    );
+    return;
+
+erro_historico:
+    mostrarErro(SQL_HANDLE_STMT, consulta);
+    SQLFreeHandle(SQL_HANDLE_STMT, consulta);
+    mg_http_reply(
+        c, 500, "Content-Type: application/json; charset=utf-8\r\n",
+        "{\"erro\":\"Falha ao consultar o histórico.\"}\n"
+    );
+}
+
 static void tratarRequisicao(
     struct mg_connection *c,
     int evento,
@@ -520,14 +919,37 @@ static void tratarRequisicao(
 
     struct mg_http_message *requisicao = dados;
 
-    if (mg_match(
-        requisicao->uri, mg_str("/api/hello"), NULL
-    )) {
+    if (
+        mg_match(requisicao->uri, mg_str("/api/hello"), NULL) &&
+        mg_match(requisicao->method, mg_str("GET"), NULL)
+    ) {
         mg_http_reply(
             c, 200, "Content-Type: application/json; charset=utf-8\r\n",
             "{\"status\":\"ok\","
             "\"mensagem\":\"Servidor C funcionando!\"}\n"
         );
+    } else if (mg_match(
+        requisicao->uri, mg_str("/api/encomendas/historico"), NULL
+    )) {
+        if (mg_match(requisicao->method, mg_str("GET"), NULL)) {
+            listarHistoricoEncomenda(c, requisicao);
+        } else {
+            mg_http_reply(
+                c, 405, "Content-Type: application/json; charset=utf-8\r\n",
+                "{\"erro\":\"Método não permitido.\"}\n"
+            );
+        }
+    } else if (mg_match(
+        requisicao->uri, mg_str("/api/encomendas/status"), NULL
+    )) {
+        if (mg_match(requisicao->method, mg_str("PUT"), NULL)) {
+            atualizarStatusEncomenda(c, requisicao);
+        } else {
+            mg_http_reply(
+                c, 405, "Content-Type: application/json; charset=utf-8\r\n",
+                "{\"erro\":\"Método não permitido.\"}\n"
+            );
+        }
     } else if (
         mg_match(requisicao->uri, mg_str("/api/encomendas"), NULL) &&
         mg_match(requisicao->method, mg_str("GET"), NULL)
@@ -543,7 +965,7 @@ static void tratarRequisicao(
     ) {
         mg_http_reply(
             c, 405, "Content-Type: application/json; charset=utf-8\r\n",
-            "{\"erro\":\"Metodo nao permitido.\"}\n"
+            "{\"erro\":\"Método não permitido.\"}\n"
         );
     } else {
         struct mg_http_serve_opts opcoes = {

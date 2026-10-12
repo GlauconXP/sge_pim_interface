@@ -71,7 +71,15 @@ const statusClass = (s) =>
     "Em distribuição": "b4",
     Entregue: "b4",
   })[s] || "b1";
-const badge = (s) => `<span class="badge ${statusClass(s)}">${s}</span>`;
+const escaparHtml = (valor) =>
+  String(valor ?? "").replace(/[&<>"']/g, (caractere) => ({
+    "&": "&amp;",
+    "<": "&lt;",
+    ">": "&gt;",
+    '"': "&quot;",
+    "'": "&#39;",
+  })[caractere]);
+const badge = (s) => `<span class="badge ${statusClass(s)}">${escaparHtml(s)}</span>`;
 const login = document.getElementById("login"),
   app = document.getElementById("app");
 async function enter() {
@@ -156,15 +164,19 @@ function renderOrders() {
   document.getElementById("ordersTable").innerHTML = rows
     .map(
       (o) =>
-        `<tr><td>${o.code}</td><td>${o.recipient}</td><td>${o.destination}</td><td>${badge(o.status)}</td><td>${o.owner}</td><td><button class="link track" data-code="${o.code}">Ver</button> · <button class="link advance" data-code="${o.code}">Avançar</button></td></tr>`,
+        `<tr><td>${o.code}</td><td>${o.recipient}</td><td>${o.destination}</td><td>${badge(o.status)}</td><td>${o.owner}</td><td><button class="link track" data-code="${o.code}">Ver</button> · ${o.status === "Entregue" ? '<button class="link" disabled>Concluída</button>' : `<button class="link advance" data-code="${o.code}">Avançar</button>`}</td></tr>`,
     )
     .join("");
   document
     .querySelectorAll(".track")
     .forEach((b) => (b.onclick = () => openModal(b.dataset.code)));
-  document
-    .querySelectorAll(".advance")
-    .forEach((b) => (b.onclick = () => advance(b.dataset.code)));
+  document.querySelectorAll(".advance").forEach((botao) => {
+    botao.onclick = async () => {
+      botao.disabled = true;
+      await advance(botao.dataset.code);
+      if (botao.isConnected) botao.disabled = false;
+    };
+  });
 }
 function renderEmployees() {
   document.getElementById("employeesTable").innerHTML = employees
@@ -185,11 +197,52 @@ function renderAll() {
 }
 document.getElementById("search").oninput = renderOrders;
 document.getElementById("filter").onchange = renderOrders;
-function advance(code) {
-  const o = orders.find((x) => x.code === code),
-    i = flow.indexOf(o.status);
-  o.status = flow[Math.min(i + 1, flow.length - 1)];
-  renderAll();
+async function advance(code) {
+  const encomenda = orders.find((item) => item.code === code);
+  if (!encomenda) {
+    alert("Não encontrei essa encomenda na lista.");
+    return;
+  }
+
+  const indice = flow.indexOf(encomenda.status);
+  if (indice < 0) {
+    alert("O status atual dessa encomenda não é reconhecido.");
+    return;
+  }
+  if (indice >= flow.length - 1) {
+    alert("Essa encomenda já está marcada como entregue.");
+    return;
+  }
+
+  const proximoStatus = flow[indice + 1];
+
+  try {
+    const resposta = await fetch("/api/encomendas/status", {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ code: encomenda.code, status: proximoStatus }),
+    });
+
+    let resultado = {};
+    try {
+      resultado = await resposta.json();
+    } catch (_) {
+      // Mantém uma mensagem genérica caso o servidor não retorne JSON.
+    }
+
+    if (!resposta.ok) {
+      throw new Error(
+        resultado.erro || `Não foi possível atualizar o status (HTTP ${resposta.status}).`,
+      );
+    }
+
+    // Só atualiza a tela depois que o SQL Server confirmar a alteração.
+    await carregarEncomendasDoBanco();
+    renderAll();
+  } catch (erro) {
+    console.error("Erro ao atualizar status:", erro);
+    alert(erro.message || "Não foi possível atualizar o status da encomenda.");
+  }
 }
 document.getElementById("packageForm").addEventListener("submit", async (e) => {
   e.preventDefault();
@@ -248,14 +301,47 @@ document.getElementById("packageForm").addEventListener("submit", async (e) => {
       erro.message || "Erro ao cadastrar. Confira se o servidor C está funcionando.";
   }
 });
-function openModal(code) {
-  const o = orders.find((x) => x.code === code);
-  document.getElementById("modalCode").textContent = o.code;
-  const i = flow.indexOf(o.status);
+async function openModal(code) {
+  const encomenda = orders.find((item) => item.code === code);
+  if (!encomenda) {
+    alert("Não encontrei essa encomenda na lista.");
+    return;
+  }
+
+  document.getElementById("modalCode").textContent = encomenda.code;
   document.getElementById("modalBody").innerHTML =
-    `<div class="tracking"><div class="box"><b>Resumo</b><p><b>Destinatário:</b> ${o.recipient}</p><p><b>Destino:</b> ${o.destination}</p><p><b>Status:</b> ${badge(o.status)}</p><p><b>Responsável:</b> ${o.owner}</p><p><b>Tipo:</b> ${o.type}</p><p><b>Prioridade:</b> ${o.priority}</p></div><div class="box"><b>Histórico</b><div class="timeline">${flow.map((s, n) => `<div class="${n < i ? "done" : n === i ? "current" : ""}"><span class="dot"></span><p><b>${s}</b><br><small>${n < i ? "Concluído" : n === i ? "Etapa atual" : "Pendente"}</small></p></div>`).join("")}</div></div></div>`;
+    `<div class="tracking"><div class="box"><b>Resumo</b><p><b>Destinatário:</b> ${escaparHtml(encomenda.recipient)}</p><p><b>Destino:</b> ${escaparHtml(encomenda.destination)}</p><p><b>Status atual:</b> ${badge(encomenda.status)}</p><p><b>Responsável:</b> ${escaparHtml(encomenda.owner)}</p><p><b>Tipo:</b> ${escaparHtml(encomenda.type)}</p><p><b>Prioridade:</b> ${escaparHtml(encomenda.priority)}</p></div><div class="box"><b>Histórico de movimentações</b><div id="historyContent"><p>Consultando histórico...</p></div></div></div>`;
   document.getElementById("modal").classList.remove("hidden");
+
+  const conteudoHistorico = document.getElementById("historyContent");
+  try {
+    const resposta = await fetch(
+      `/api/encomendas/historico?codigo=${encodeURIComponent(encomenda.code)}`,
+    );
+    const dados = await resposta.json();
+
+    if (!resposta.ok) {
+      throw new Error(dados.erro || "Não foi possível consultar o histórico.");
+    }
+    if (!Array.isArray(dados)) {
+      throw new Error("A resposta do histórico é inválida.");
+    }
+
+    if (dados.length === 0) {
+      conteudoHistorico.innerHTML =
+        '<p>Nenhuma movimentação foi registrada para esta encomenda ainda.</p>';
+      return;
+    }
+
+    conteudoHistorico.innerHTML = `<div class="timeline">${dados.map((movimentacao, indice) =>
+      `<div class="${indice === dados.length - 1 ? "current" : "done"}"><span class="dot"></span><p><b>${escaparHtml(movimentacao.status)}</b><br><small>${escaparHtml(movimentacao.dataHora)}</small>${movimentacao.observacao ? `<br><small>${escaparHtml(movimentacao.observacao)}</small>` : ""}</p></div>`,
+    ).join("")}</div>`;
+  } catch (erro) {
+    console.error("Erro ao carregar histórico:", erro);
+    conteudoHistorico.innerHTML = `<p class="error">${escaparHtml(erro.message || "Erro ao consultar o histórico.")}</p>`;
+  }
 }
+
 document.getElementById("quickTrack").onclick = () => {
   if (orders.length === 0) {
     alert("Não há encomendas cadastradas para consultar.");
