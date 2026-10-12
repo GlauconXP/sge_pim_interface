@@ -1,36 +1,27 @@
-SGE - Vincular funcionário responsável à encomenda
+SGE — Cadastro e edição de funcionários
 
-Esta atualização altera somente:
-- backend/src/server.c
-- frontend/script.js
-- docs/seed_funcionarios_demo.sql
+Arquivos incluídos na atualização:
+- backend/src/server.c: endpoints GET/POST/PUT para funcionários.
+- frontend/script.js: formulário, edição, ativação/inativação e recarga dos dados.
+- frontend/index.html: ações na tabela e modal de funcionário.
+- frontend/style.css: estilos do modal e dos botões de ação.
 
-PASSO 1 - Preparar funcionários no banco
-1. Abra o SQL Server Management Studio (SSMS).
-2. Abra docs/seed_funcionarios_demo.sql.
-3. Confirme que o banco selecionado é SGE_Encomendas.
-4. Execute o script (F5). Ele insere os cinco funcionários de demonstração apenas se suas matrículas ainda não existirem. Não altera cadastros existentes.
+Como instalar:
+1. Faça uma cópia de segurança da pasta atual do projeto.
+2. Extraia os arquivos deste pacote na raiz do repositório sge_pim_interface, permitindo substituir os arquivos correspondentes.
+3. Pare o servidor C com Ctrl+C.
+4. Abra o PowerShell na raiz do projeto e compile:
+   gcc -D_POSIX_C_SOURCE=200000L .\backend\src\server.c .\backend\third_party\mongoose\mongoose.c -I.\backend\third_party\mongoose -o .\build\sge_server.exe -lws2_32 -lodbc32
+5. Se a compilação terminar sem erros, execute:
+   .\build\sge_server.exe
+6. Abra http://127.0.0.1:8000 e pressione Ctrl+F5.
 
-PASSO 2 - Substituir arquivos
-1. Pare o servidor com Ctrl+C.
-2. Extraia este ZIP na raiz do projeto sge_pim_interface.
-3. Autorize substituir backend/src/server.c e frontend/script.js.
-4. Não substitua nem apague a pasta .git.
+Teste sugerido:
+- Em Funcionários, clique Novo funcionário e cadastre uma matrícula de teste ainda não utilizada.
+- Confira se aparece na tabela após salvar e atualizar a página.
+- Clique Editar, altere setor/cargo e salve.
+- Use Inativar/Ativar para alterar a situação sem excluir o registro.
+- Confira que funcionários inativos deixam de aparecer no seletor de responsável ao cadastrar encomenda.
 
-PASSO 3 - Recompilar e executar
-Na raiz do projeto, no PowerShell do VS Code:
-
-New-Item -ItemType Directory -Force .\build | Out-Null
-gcc -D_POSIX_C_SOURCE=200000L .\backend\src\server.c .\backend\third_party\mongoose\mongoose.c -I.\backend\third_party\mongoose -o .\build\sge_server.exe -lws2_32 -lodbc32
-
-Se a compilação terminar sem erros:
-
-.\build\sge_server.exe
-
-PASSO 4 - Testar
-1. Abra http://127.0.0.1:8000 e entre no sistema.
-2. Confira se a página Funcionários lista os funcionários vindos do SQL Server.
-3. Cadastre uma encomenda de teste e escolha um funcionário responsável.
-4. Confira se o nome aparece na coluna Responsável depois do cadastro e após atualizar a página.
-
-Observação: as encomendas já cadastradas anteriormente sem responsável continuarão sem responsável (—). Esta atualização não atribui funcionários automaticamente às encomendas antigas.
+A API utiliza consultas parametrizadas. Não exclui funcionários; a situação é alterada pelo campo Ativo, preservando vínculos históricos.
+A autenticação atual do protótipo continua sendo demonstrativa; este cadastro não substitui um sistema real de permissões.

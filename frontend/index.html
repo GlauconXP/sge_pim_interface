@@ -78,7 +78,7 @@
 
       <section id="page-funcionarios" class="page">
         <div class="page-head"><div><h2>Funcionários</h2><p>Usuários autorizados a operar o sistema.</p></div><button class="btn primary" id="newEmployee">＋ Novo funcionário</button></div>
-        <article class="card"><div class="table-wrap"><table><thead><tr><th>Matrícula</th><th>Nome</th><th>Cargo</th><th>Setor</th><th>Status</th></tr></thead><tbody id="employeesTable"></tbody></table></div></article>
+        <article class="card"><div id="employeeNotice" class="success" role="status"></div><div class="table-wrap"><table><thead><tr><th>Matrícula</th><th>Nome</th><th>Cargo</th><th>Setor</th><th>Status</th><th>Ações</th></tr></thead><tbody id="employeesTable"></tbody></table></div></article>
       </section>
 
       <section id="page-relatorios" class="page">
@@ -88,6 +88,34 @@
       </section>
     </main>
   </section>
+
+  <div id="employeeModal" class="modal hidden">
+    <div class="backdrop employee-backdrop"></div>
+    <div class="modal-card employee-modal-card" role="dialog" aria-modal="true" aria-labelledby="employeeModalTitle">
+      <button id="closeEmployeeModal" class="close" type="button" aria-label="Fechar">×</button>
+      <small>GESTÃO DE FUNCIONÁRIOS</small>
+      <h3 id="employeeModalTitle">Novo funcionário</h3>
+      <form id="employeeForm" class="form employee-form">
+        <div>
+          <label>Matrícula<input name="matricula" maxlength="20" required placeholder="Ex.: 006789"></label>
+          <label>Nome completo<input name="nome" maxlength="100" required placeholder="Nome do funcionário"></label>
+        </div>
+        <div>
+          <label>Cargo<input name="cargo" maxlength="50" required placeholder="Ex.: Atendente"></label>
+          <label>Setor<input name="setor" maxlength="50" required placeholder="Ex.: Triagem"></label>
+        </div>
+        <div>
+          <label>Situação<select name="ativo" required><option value="true">Ativo</option><option value="false">Inativo</option></select></label>
+          <div class="employee-form-help">Funcionários inativos não podem ser escolhidos como responsáveis por novas encomendas.</div>
+        </div>
+        <div class="form-actions">
+          <button id="cancelEmployeeModal" class="btn secondary" type="button">Cancelar</button>
+          <button id="saveEmployeeButton" class="btn primary" type="submit">Cadastrar funcionário</button>
+        </div>
+        <div id="employeeFormMessage" class="error" role="alert"></div>
+      </form>
+    </div>
+  </div>
 
   <div id="modal" class="modal hidden"><div class="backdrop"></div><div class="modal-card"><button id="closeModal" class="close">×</button><small>CONSULTA DE ENCOMENDA</small><h3 id="modalCode"></h3><div id="modalBody"></div></div></div>
   <script src="script.js"></script>

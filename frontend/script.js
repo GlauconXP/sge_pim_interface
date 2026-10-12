@@ -167,9 +167,16 @@ function renderEmployees() {
   document.getElementById("employeesTable").innerHTML = employees
     .map(
       (e) =>
-        `<tr><td>${escaparHtml(e.id)}</td><td>${escaparHtml(e.name)}</td><td>${escaparHtml(e.role)}</td><td>${escaparHtml(e.sector)}</td><td>${e.active ? '<span class="badge b4">Ativo</span>' : '<span class="badge b1">Inativo</span>'}</td></tr>`,
+        `<tr><td>${escaparHtml(e.id)}</td><td>${escaparHtml(e.name)}</td><td>${escaparHtml(e.role)}</td><td>${escaparHtml(e.sector)}</td><td>${e.active ? '<span class="badge b4">Ativo</span>' : '<span class="badge b1">Inativo</span>'}</td><td class="employee-actions"><button class="link employee-edit" data-matricula="${escaparHtml(e.id)}">Editar</button><button class="link employee-toggle" data-matricula="${escaparHtml(e.id)}">${e.active ? "Inativar" : "Ativar"}</button></td></tr>`,
     )
     .join("");
+
+  document.querySelectorAll(".employee-edit").forEach((botao) => {
+    botao.onclick = () => abrirModalFuncionario(botao.dataset.matricula);
+  });
+  document.querySelectorAll(".employee-toggle").forEach((botao) => {
+    botao.onclick = () => alternarSituacaoFuncionario(botao.dataset.matricula);
+  });
 
   const seletor = document.getElementById("owner");
   const valorAnterior = seletor.value;
@@ -353,6 +360,124 @@ document.querySelector(".backdrop").onclick = () =>
 document.getElementById("refresh").onclick = () =>
   (document.getElementById("delivery").textContent =
     82 + Math.floor(Math.random() * 14) + "%");
-document.getElementById("newEmployee").onclick = () =>
-  alert("Tela de cadastro de funcionário será implementada na próxima etapa.");
+let matriculaOriginalEmEdicao = null;
+
+function abrirModalFuncionario(matricula = null) {
+  const funcionario = matricula === null
+    ? null
+    : employees.find((item) => item.id === matricula);
+  if (matricula !== null && !funcionario) {
+    alert("Não encontrei esse funcionário. Atualize a lista e tente novamente.");
+    return;
+  }
+
+  const form = document.getElementById("employeeForm");
+  form.reset();
+  matriculaOriginalEmEdicao = funcionario ? funcionario.id : null;
+  document.getElementById("employeeModalTitle").textContent =
+    funcionario ? "Editar funcionário" : "Novo funcionário";
+  document.getElementById("saveEmployeeButton").textContent =
+    funcionario ? "Salvar alterações" : "Cadastrar funcionário";
+  document.getElementById("employeeFormMessage").textContent = "";
+  form.elements.namedItem("matricula").value = funcionario ? funcionario.id : "";
+  form.elements.namedItem("nome").value = funcionario ? funcionario.name : "";
+  form.elements.namedItem("cargo").value = funcionario ? funcionario.role : "";
+  form.elements.namedItem("setor").value = funcionario ? funcionario.sector : "";
+  form.elements.namedItem("ativo").value = funcionario ? String(funcionario.active) : "true";
+  document.getElementById("employeeModal").classList.remove("hidden");
+}
+
+function fecharModalFuncionario() {
+  document.getElementById("employeeModal").classList.add("hidden");
+  document.getElementById("employeeFormMessage").textContent = "";
+}
+
+document.getElementById("newEmployee").onclick = () => abrirModalFuncionario();
+document.getElementById("closeEmployeeModal").onclick = fecharModalFuncionario;
+document.getElementById("cancelEmployeeModal").onclick = fecharModalFuncionario;
+document.querySelector(".employee-backdrop").onclick = fecharModalFuncionario;
+
+document.getElementById("employeeForm").addEventListener("submit", async (evento) => {
+  evento.preventDefault();
+  const form = evento.currentTarget;
+  const dados = new FormData(form);
+  const mensagem = document.getElementById("employeeFormMessage");
+  const botaoSalvar = document.getElementById("saveEmployeeButton");
+  const editando = matriculaOriginalEmEdicao !== null;
+  const payload = {
+    originalMatricula: matriculaOriginalEmEdicao,
+    matricula: String(dados.get("matricula") ?? "").trim(),
+    nome: String(dados.get("nome") ?? "").trim(),
+    cargo: String(dados.get("cargo") ?? "").trim(),
+    setor: String(dados.get("setor") ?? "").trim(),
+    ativo: String(dados.get("ativo")) === "true",
+  };
+
+  if (!payload.matricula || !payload.nome || !payload.cargo || !payload.setor) {
+    mensagem.textContent = "Preencha todos os campos antes de salvar.";
+    return;
+  }
+
+  botaoSalvar.disabled = true;
+  mensagem.textContent = "Salvando...";
+  try {
+    await enviarFuncionario(payload, editando ? "PUT" : "POST");
+    await Promise.all([carregarFuncionariosDoBanco(), carregarEncomendasDoBanco()]);
+    renderAll();
+    fecharModalFuncionario();
+    document.getElementById("employeeNotice").textContent = editando
+      ? "Funcionário atualizado com sucesso."
+      : "Funcionário cadastrado com sucesso.";
+  } catch (erro) {
+    console.error("Erro ao salvar funcionário:", erro);
+    mensagem.textContent = erro.message || "Não foi possível salvar o funcionário.";
+  } finally {
+    botaoSalvar.disabled = false;
+  }
+});
+
+async function enviarFuncionario(payload, metodo) {
+  const resposta = await fetch("/api/funcionarios", {
+    method: metodo,
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload),
+  });
+  let resultado = {};
+  try {
+    resultado = await resposta.json();
+  } catch (_) {
+    // Mantém mensagem padrão se a API não enviar JSON.
+  }
+  if (!resposta.ok) {
+    throw new Error(resultado.erro || `Não foi possível salvar o funcionário (HTTP ${resposta.status}).`);
+  }
+  return resultado;
+}
+
+async function alternarSituacaoFuncionario(matricula) {
+  const funcionario = employees.find((item) => item.id === matricula);
+  if (!funcionario) return;
+  const novaSituacao = !funcionario.active;
+  const acao = novaSituacao ? "ativar" : "inativar";
+  if (!confirm(`Deseja ${acao} o funcionário ${funcionario.name}?`)) return;
+
+  try {
+    await enviarFuncionario({
+      originalMatricula: funcionario.id,
+      matricula: funcionario.id,
+      nome: funcionario.name,
+      cargo: funcionario.role,
+      setor: funcionario.sector,
+      ativo: novaSituacao,
+    }, "PUT");
+    await Promise.all([carregarFuncionariosDoBanco(), carregarEncomendasDoBanco()]);
+    renderAll();
+    document.getElementById("employeeNotice").textContent =
+      `Funcionário ${novaSituacao ? "ativado" : "inativado"} com sucesso.`;
+  } catch (erro) {
+    console.error("Erro ao alterar situação do funcionário:", erro);
+    alert(erro.message || "Não foi possível alterar a situação do funcionário.");
+  }
+}
+
 navigate("dashboard");

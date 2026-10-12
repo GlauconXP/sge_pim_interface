@@ -5,6 +5,7 @@
 #include <stdio.h>
 #include <string.h>
 #include <limits.h>
+#include <stdbool.h>
 
 static SQLHENV ambiente = SQL_NULL_HENV;
 static SQLHDBC conexao = SQL_NULL_HDBC;
@@ -738,6 +739,205 @@ static void listarFuncionarios(struct mg_connection *c) {
     );
 }
 
+/* Cria um funcionário na tabela dbo.Funcionarios. */
+static void cadastrarFuncionario(
+    struct mg_connection *c,
+    struct mg_http_message *requisicao
+) {
+    SQLHSTMT consulta = SQL_NULL_HSTMT;
+    SQLRETURN resultado;
+    struct mg_str corpo = requisicao->body;
+    SQLWCHAR matricula[21] = {0};
+    SQLWCHAR nome[101] = {0};
+    SQLWCHAR cargo[51] = {0};
+    SQLWCHAR setor[51] = {0};
+    bool ativoJson = true;
+    SQLCHAR ativo = 1;
+
+    if (!converterCampoJson(corpo, "$.matricula", matricula, 21) ||
+        !converterCampoJson(corpo, "$.nome", nome, 101) ||
+        !converterCampoJson(corpo, "$.cargo", cargo, 51) ||
+        !converterCampoJson(corpo, "$.setor", setor, 51) ||
+        !mg_json_get_bool(corpo, "$.ativo", &ativoJson) ||
+        matricula[0] == 0 || nome[0] == 0 || cargo[0] == 0 || setor[0] == 0) {
+        mg_http_reply(
+            c, 400, "Content-Type: application/json; charset=utf-8\r\n",
+            "{\"erro\":\"Preencha matrícula, nome, cargo, setor e situação.\"}\n"
+        );
+        return;
+    }
+
+    ativo = ativoJson ? 1 : 0;
+    resultado = SQLAllocHandle(SQL_HANDLE_STMT, conexao, &consulta);
+    if (!SQL_SUCCEEDED(resultado)) {
+        mostrarErro(SQL_HANDLE_DBC, conexao);
+        mg_http_reply(
+            c, 500, "Content-Type: application/json; charset=utf-8\r\n",
+            "{\"erro\":\"Não foi possível preparar o cadastro do funcionário.\"}\n"
+        );
+        return;
+    }
+
+    SQLCHAR sql[] =
+        "INSERT INTO dbo.Funcionarios (Matricula, Nome, Cargo, Setor, Ativo) "
+        "VALUES (?, ?, ?, ?, ?)";
+    resultado = SQLPrepare(consulta, sql, SQL_NTS);
+    if (!SQL_SUCCEEDED(resultado)) goto erro_cadastrar_funcionario;
+
+    SQLWCHAR *valores[] = {matricula, nome, cargo, setor};
+    SQLULEN tamanhosColuna[] = {20, 100, 50, 50};
+    SQLLEN tamanhosBuffer[] = {
+        (SQLLEN) sizeof(matricula), (SQLLEN) sizeof(nome),
+        (SQLLEN) sizeof(cargo), (SQLLEN) sizeof(setor)
+    };
+    SQLLEN indicadores[4];
+
+    for (int i = 0; i < 4; i++) {
+        indicadores[i] = SQL_NTS;
+        resultado = SQLBindParameter(
+            consulta, (SQLUSMALLINT)(i + 1), SQL_PARAM_INPUT,
+            SQL_C_WCHAR, SQL_WVARCHAR, tamanhosColuna[i], 0,
+            valores[i], tamanhosBuffer[i], &indicadores[i]
+        );
+        if (!SQL_SUCCEEDED(resultado)) goto erro_cadastrar_funcionario;
+    }
+
+    SQLLEN indicadorAtivo = 0;
+    resultado = SQLBindParameter(
+        consulta, 5, SQL_PARAM_INPUT, SQL_C_BIT, SQL_BIT,
+        1, 0, &ativo, sizeof(ativo), &indicadorAtivo
+    );
+    if (!SQL_SUCCEEDED(resultado)) goto erro_cadastrar_funcionario;
+
+    resultado = SQLExecute(consulta);
+    if (!SQL_SUCCEEDED(resultado)) goto erro_cadastrar_funcionario;
+
+    SQLFreeHandle(SQL_HANDLE_STMT, consulta);
+    mg_http_reply(
+        c, 201, "Content-Type: application/json; charset=utf-8\r\n",
+        "{\"mensagem\":\"Funcionário cadastrado com sucesso.\"}\n"
+    );
+    return;
+
+erro_cadastrar_funcionario:
+    mostrarErro(SQL_HANDLE_STMT, consulta);
+    SQLFreeHandle(SQL_HANDLE_STMT, consulta);
+    mg_http_reply(
+        c, 409, "Content-Type: application/json; charset=utf-8\r\n",
+        "{\"erro\":\"Não foi possível cadastrar. Confira se a matrícula já existe e se os dados são válidos.\"}\n"
+    );
+}
+
+/* Atualiza dados do funcionário identificado pela matrícula original. */
+static void atualizarFuncionario(
+    struct mg_connection *c,
+    struct mg_http_message *requisicao
+) {
+    SQLHSTMT consulta = SQL_NULL_HSTMT;
+    SQLRETURN resultado;
+    SQLLEN linhasAfetadas = -1;
+    struct mg_str corpo = requisicao->body;
+    SQLWCHAR matriculaOriginal[21] = {0};
+    SQLWCHAR matricula[21] = {0};
+    SQLWCHAR nome[101] = {0};
+    SQLWCHAR cargo[51] = {0};
+    SQLWCHAR setor[51] = {0};
+    bool ativoJson = true;
+    SQLCHAR ativo = 1;
+
+    if (!converterCampoJson(corpo, "$.originalMatricula", matriculaOriginal, 21) ||
+        !converterCampoJson(corpo, "$.matricula", matricula, 21) ||
+        !converterCampoJson(corpo, "$.nome", nome, 101) ||
+        !converterCampoJson(corpo, "$.cargo", cargo, 51) ||
+        !converterCampoJson(corpo, "$.setor", setor, 51) ||
+        !mg_json_get_bool(corpo, "$.ativo", &ativoJson) ||
+        matriculaOriginal[0] == 0 || matricula[0] == 0 ||
+        nome[0] == 0 || cargo[0] == 0 || setor[0] == 0) {
+        mg_http_reply(
+            c, 400, "Content-Type: application/json; charset=utf-8\r\n",
+            "{\"erro\":\"Dados do funcionário inválidos ou incompletos.\"}\n"
+        );
+        return;
+    }
+
+    ativo = ativoJson ? 1 : 0;
+    resultado = SQLAllocHandle(SQL_HANDLE_STMT, conexao, &consulta);
+    if (!SQL_SUCCEEDED(resultado)) {
+        mostrarErro(SQL_HANDLE_DBC, conexao);
+        mg_http_reply(
+            c, 500, "Content-Type: application/json; charset=utf-8\r\n",
+            "{\"erro\":\"Não foi possível preparar a atualização do funcionário.\"}\n"
+        );
+        return;
+    }
+
+    SQLCHAR sql[] =
+        "UPDATE dbo.Funcionarios SET Matricula = ?, Nome = ?, Cargo = ?, "
+        "Setor = ?, Ativo = ? WHERE Matricula = ?";
+    resultado = SQLPrepare(consulta, sql, SQL_NTS);
+    if (!SQL_SUCCEEDED(resultado)) goto erro_atualizar_funcionario;
+
+    SQLWCHAR *valores[] = {matricula, nome, cargo, setor};
+    SQLULEN tamanhosColuna[] = {20, 100, 50, 50};
+    SQLLEN tamanhosBuffer[] = {
+        (SQLLEN) sizeof(matricula), (SQLLEN) sizeof(nome),
+        (SQLLEN) sizeof(cargo), (SQLLEN) sizeof(setor)
+    };
+    SQLLEN indicadores[4];
+
+    for (int i = 0; i < 4; i++) {
+        indicadores[i] = SQL_NTS;
+        resultado = SQLBindParameter(
+            consulta, (SQLUSMALLINT)(i + 1), SQL_PARAM_INPUT,
+            SQL_C_WCHAR, SQL_WVARCHAR, tamanhosColuna[i], 0,
+            valores[i], tamanhosBuffer[i], &indicadores[i]
+        );
+        if (!SQL_SUCCEEDED(resultado)) goto erro_atualizar_funcionario;
+    }
+
+    SQLLEN indicadorAtivo = 0;
+    resultado = SQLBindParameter(
+        consulta, 5, SQL_PARAM_INPUT, SQL_C_BIT, SQL_BIT,
+        1, 0, &ativo, sizeof(ativo), &indicadorAtivo
+    );
+    if (!SQL_SUCCEEDED(resultado)) goto erro_atualizar_funcionario;
+
+    SQLLEN indicadorMatriculaOriginal = SQL_NTS;
+    resultado = SQLBindParameter(
+        consulta, 6, SQL_PARAM_INPUT, SQL_C_WCHAR, SQL_WVARCHAR,
+        20, 0, matriculaOriginal, sizeof(matriculaOriginal),
+        &indicadorMatriculaOriginal
+    );
+    if (!SQL_SUCCEEDED(resultado)) goto erro_atualizar_funcionario;
+
+    resultado = SQLExecute(consulta);
+    if (!SQL_SUCCEEDED(resultado)) goto erro_atualizar_funcionario;
+
+    SQLRowCount(consulta, &linhasAfetadas);
+    SQLFreeHandle(SQL_HANDLE_STMT, consulta);
+    if (linhasAfetadas == 0) {
+        mg_http_reply(
+            c, 404, "Content-Type: application/json; charset=utf-8\r\n",
+            "{\"erro\":\"Funcionário não encontrado; atualize a lista e tente novamente.\"}\n"
+        );
+        return;
+    }
+
+    mg_http_reply(
+        c, 200, "Content-Type: application/json; charset=utf-8\r\n",
+        "{\"mensagem\":\"Funcionário atualizado com sucesso.\"}\n"
+    );
+    return;
+
+erro_atualizar_funcionario:
+    mostrarErro(SQL_HANDLE_STMT, consulta);
+    SQLFreeHandle(SQL_HANDLE_STMT, consulta);
+    mg_http_reply(
+        c, 409, "Content-Type: application/json; charset=utf-8\r\n",
+        "{\"erro\":\"Não foi possível atualizar. Confira se a matrícula já existe e se os dados são válidos.\"}\n"
+    );
+}
+
 /* Valida os status que o sistema permite registrar. */
 static int statusPermitido(const char *status) {
     const char *permitidos[] = {
@@ -1121,6 +1321,10 @@ static void tratarRequisicao(
     ) {
         if (mg_match(requisicao->method, mg_str("GET"), NULL)) {
             listarFuncionarios(c);
+        } else if (mg_match(requisicao->method, mg_str("POST"), NULL)) {
+            cadastrarFuncionario(c, requisicao);
+        } else if (mg_match(requisicao->method, mg_str("PUT"), NULL)) {
+            atualizarFuncionario(c, requisicao);
         } else {
             mg_http_reply(
                 c, 405, "Content-Type: application/json; charset=utf-8\r\n",
