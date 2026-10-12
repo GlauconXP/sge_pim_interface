@@ -251,7 +251,25 @@ static void cadastrarEncomenda(
     SQLWCHAR tipo[61];
     SQLWCHAR status[61];
     SQLWCHAR prioridade[41];
+    SQLWCHAR matriculaResponsavel[32] = {0};
     struct mg_str corpo = requisicao->body;
+
+    char *matriculaResponsavelTexto = mg_json_get_str(corpo, "$.ownerMatricula");
+    if (matriculaResponsavelTexto != NULL) {
+        int convertido = MultiByteToWideChar(
+            CP_UTF8, 0, matriculaResponsavelTexto, -1,
+            (LPWSTR) matriculaResponsavel,
+            (int) (sizeof(matriculaResponsavel) / sizeof(matriculaResponsavel[0]))
+        );
+        mg_free(matriculaResponsavelTexto);
+        if (convertido <= 0) {
+            mg_http_reply(
+                c, 400, "Content-Type: application/json; charset=utf-8\r\n",
+                "{\"erro\":\"Matrícula do funcionário inválida.\"}\n"
+            );
+            return;
+        }
+    }
 
     int valido =
         converterCampoJson(corpo, "$.code", codigo, 64) &&
@@ -270,6 +288,63 @@ static void cadastrarEncomenda(
             "{\"erro\":\"Preencha corretamente todos os campos.\"}\n"
         );
         return;
+    }
+
+    /* Se foi selecionado um responsável, confirme que existe e está ativo. */
+    if (matriculaResponsavel[0] != 0) {
+        SQLHSTMT validacaoFuncionario = SQL_NULL_HSTMT;
+        resultado = SQLAllocHandle(
+            SQL_HANDLE_STMT, conexao, &validacaoFuncionario
+        );
+        if (!SQL_SUCCEEDED(resultado)) {
+            mostrarErro(SQL_HANDLE_DBC, conexao);
+            mg_http_reply(
+                c, 500, "Content-Type: application/json; charset=utf-8\r\n",
+                "{\"erro\":\"Não foi possível validar o funcionário.\"}\n"
+            );
+            return;
+        }
+
+        SQLCHAR sqlValidacao[] =
+            "SELECT Id FROM dbo.Funcionarios WHERE Matricula = ? AND Ativo = 1";
+        resultado = SQLPrepare(validacaoFuncionario, sqlValidacao, SQL_NTS);
+        SQLLEN tamanhoMatriculaValidacao = SQL_NTS;
+        if (SQL_SUCCEEDED(resultado)) {
+            resultado = SQLBindParameter(
+                validacaoFuncionario, 1, SQL_PARAM_INPUT,
+                SQL_C_WCHAR, SQL_WVARCHAR, 20, 0,
+                matriculaResponsavel, sizeof(matriculaResponsavel),
+                &tamanhoMatriculaValidacao
+            );
+        }
+        if (SQL_SUCCEEDED(resultado)) {
+            resultado = SQLExecute(validacaoFuncionario);
+        }
+        if (!SQL_SUCCEEDED(resultado)) {
+            mostrarErro(SQL_HANDLE_STMT, validacaoFuncionario);
+            SQLFreeHandle(SQL_HANDLE_STMT, validacaoFuncionario);
+            mg_http_reply(
+                c, 500, "Content-Type: application/json; charset=utf-8\r\n",
+                "{\"erro\":\"Erro ao validar o funcionário no banco.\"}\n"
+            );
+            return;
+        }
+        resultado = SQLFetch(validacaoFuncionario);
+        SQLFreeHandle(SQL_HANDLE_STMT, validacaoFuncionario);
+        if (resultado == SQL_NO_DATA) {
+            mg_http_reply(
+                c, 400, "Content-Type: application/json; charset=utf-8\r\n",
+                "{\"erro\":\"O funcionário selecionado não existe ou está inativo.\"}\n"
+            );
+            return;
+        }
+        if (!SQL_SUCCEEDED(resultado)) {
+            mg_http_reply(
+                c, 500, "Content-Type: application/json; charset=utf-8\r\n",
+                "{\"erro\":\"Não foi possível validar o funcionário.\"}\n"
+            );
+            return;
+        }
     }
 
     resultado = SQLSetConnectAttr(
@@ -293,8 +368,10 @@ static void cadastrarEncomenda(
         SQLCHAR sql[] =
             "INSERT INTO dbo.Encomendas "
             "(Codigo, Destinatario, Endereco, CEP, Bairro, "
-            "Cidade, TipoEnvio, Status, Prioridade) "
-            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)";
+            "Cidade, TipoEnvio, Status, Prioridade, FuncionarioResponsavelId) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, "
+            "(SELECT Id FROM dbo.Funcionarios "
+            "WHERE Matricula = NULLIF(?, N'') AND Ativo = 1))";
         resultado = SQLPrepare(consulta, sql, SQL_NTS);
     }
     if (!SQL_SUCCEEDED(resultado)) goto erro_sql_cadastro;
@@ -331,6 +408,14 @@ static void cadastrarEncomenda(
         );
         if (!SQL_SUCCEEDED(resultado)) goto erro_sql_cadastro;
     }
+
+    SQLLEN tamanhoMatriculaResponsavel = SQL_NTS;
+    resultado = SQLBindParameter(
+        consulta, 10, SQL_PARAM_INPUT, SQL_C_WCHAR, SQL_WVARCHAR,
+        20, 0, matriculaResponsavel, sizeof(matriculaResponsavel),
+        &tamanhoMatriculaResponsavel
+    );
+    if (!SQL_SUCCEEDED(resultado)) goto erro_sql_cadastro;
 
     resultado = SQLExecute(consulta);
     if (!SQL_SUCCEEDED(resultado)) goto erro_sql_cadastro;
@@ -419,6 +504,7 @@ static void listarEncomendas(struct mg_connection *c) {
     SQLCHAR destinatario[256] = {0};
     SQLCHAR cidade[128] = {0};
     SQLCHAR status[64] = {0};
+    SQLCHAR responsavel[256] = {0};
 
     if (!SQL_SUCCEEDED(SQLAllocHandle(
         SQL_HANDLE_STMT, conexao, &consulta
@@ -431,8 +517,11 @@ static void listarEncomendas(struct mg_connection *c) {
     }
 
     SQLCHAR sql[] =
-        "SELECT TOP (100) Codigo, Destinatario, Cidade, Status "
-        "FROM dbo.Encomendas ORDER BY Id DESC";
+        "SELECT TOP (100) e.Codigo, e.Destinatario, e.Cidade, e.Status, "
+        "COALESCE(f.Nome, N'—') AS Responsavel "
+        "FROM dbo.Encomendas AS e "
+        "LEFT JOIN dbo.Funcionarios AS f ON f.Id = e.FuncionarioResponsavelId "
+        "ORDER BY e.Id DESC";
 
     resultado = SQLExecDirect(consulta, sql, SQL_NTS);
 
@@ -471,7 +560,9 @@ static void listarEncomendas(struct mg_connection *c) {
             !lerColuna(
                 consulta, 3, cidade, sizeof(cidade)) ||
             !lerColuna(
-                consulta, 4, status, sizeof(status))) {
+                consulta, 4, status, sizeof(status)) ||
+            !lerColuna(
+                consulta, 5, responsavel, sizeof(responsavel))) {
             valido = 0;
             break;
         }
@@ -520,6 +611,14 @@ static void listarEncomendas(struct mg_connection *c) {
         );
 
         if (valido) valido = adicionarTexto(
+            json, sizeof(json), &posicao, ",\"responsavel\":"
+        );
+
+        if (valido) valido = adicionarJson(
+            json, sizeof(json), &posicao, (char *) responsavel
+        );
+
+        if (valido) valido = adicionarTexto(
             json, sizeof(json), &posicao, "}"
         );
 
@@ -549,6 +648,95 @@ static void listarEncomendas(struct mg_connection *c) {
     );
 }
 
+
+/* Lista os funcionários cadastrados no SQL Server. */
+static void listarFuncionarios(struct mg_connection *c) {
+    SQLHSTMT consulta = SQL_NULL_HSTMT;
+    SQLRETURN resultado;
+    int valido = 1;
+    int primeira = 1;
+    char json[32768] = {0};
+    size_t posicao = 0;
+    SQLCHAR matricula[64] = {0};
+    SQLCHAR nome[256] = {0};
+    SQLCHAR cargo[128] = {0};
+    SQLCHAR setor[128] = {0};
+    SQLCHAR ativo[8] = {0};
+
+    resultado = SQLAllocHandle(SQL_HANDLE_STMT, conexao, &consulta);
+    if (!SQL_SUCCEEDED(resultado)) {
+        mostrarErro(SQL_HANDLE_DBC, conexao);
+        mg_http_reply(
+            c, 500, "Content-Type: application/json; charset=utf-8\r\n",
+            "{\"erro\":\"Não foi possível consultar os funcionários.\"}\n"
+        );
+        return;
+    }
+
+    SQLCHAR sql[] =
+        "SELECT Matricula, Nome, COALESCE(Cargo, N''), COALESCE(Setor, N''), "
+        "CASE WHEN Ativo = 1 THEN N'true' ELSE N'false' END "
+        "FROM dbo.Funcionarios ORDER BY Nome";
+    resultado = SQLExecDirect(consulta, sql, SQL_NTS);
+    if (!SQL_SUCCEEDED(resultado)) {
+        mostrarErro(SQL_HANDLE_STMT, consulta);
+        SQLFreeHandle(SQL_HANDLE_STMT, consulta);
+        mg_http_reply(
+            c, 500, "Content-Type: application/json; charset=utf-8\r\n",
+            "{\"erro\":\"Falha ao consultar funcionários no banco.\"}\n"
+        );
+        return;
+    }
+
+    valido = adicionarTexto(json, sizeof(json), &posicao, "[");
+    while (valido) {
+        resultado = SQLFetch(consulta);
+        if (resultado == SQL_NO_DATA) break;
+        if (!SQL_SUCCEEDED(resultado)) {
+            mostrarErro(SQL_HANDLE_STMT, consulta);
+            valido = 0;
+            break;
+        }
+        if (!lerColuna(consulta, 1, matricula, sizeof(matricula)) ||
+            !lerColuna(consulta, 2, nome, sizeof(nome)) ||
+            !lerColuna(consulta, 3, cargo, sizeof(cargo)) ||
+            !lerColuna(consulta, 4, setor, sizeof(setor)) ||
+            !lerColuna(consulta, 5, ativo, sizeof(ativo))) {
+            valido = 0;
+            break;
+        }
+        if (!primeira) valido = adicionarTexto(json, sizeof(json), &posicao, ",");
+        if (!valido) break;
+
+        valido = adicionarTexto(json, sizeof(json), &posicao, "{\"matricula\":");
+        if (valido) valido = adicionarJson(json, sizeof(json), &posicao, (char *) matricula);
+        if (valido) valido = adicionarTexto(json, sizeof(json), &posicao, ",\"nome\":");
+        if (valido) valido = adicionarJson(json, sizeof(json), &posicao, (char *) nome);
+        if (valido) valido = adicionarTexto(json, sizeof(json), &posicao, ",\"cargo\":");
+        if (valido) valido = adicionarJson(json, sizeof(json), &posicao, (char *) cargo);
+        if (valido) valido = adicionarTexto(json, sizeof(json), &posicao, ",\"setor\":");
+        if (valido) valido = adicionarJson(json, sizeof(json), &posicao, (char *) setor);
+        if (valido) valido = adicionarTexto(json, sizeof(json), &posicao, ",\"ativo\":");
+        if (valido) valido = adicionarTexto(json, sizeof(json), &posicao,
+            strcmp((char *) ativo, "true") == 0 ? "true" : "false");
+        if (valido) valido = adicionarTexto(json, sizeof(json), &posicao, "}");
+        primeira = 0;
+    }
+
+    if (valido) valido = adicionarTexto(json, sizeof(json), &posicao, "]");
+    SQLFreeHandle(SQL_HANDLE_STMT, consulta);
+    if (!valido) {
+        mg_http_reply(
+            c, 500, "Content-Type: application/json; charset=utf-8\r\n",
+            "{\"erro\":\"Não foi possível montar a lista de funcionários.\"}\n"
+        );
+        return;
+    }
+    mg_http_reply(
+        c, 200, "Content-Type: application/json; charset=utf-8\r\n",
+        "%s\n", json
+    );
+}
 
 /* Valida os status que o sistema permite registrar. */
 static int statusPermitido(const char *status) {
@@ -928,8 +1116,19 @@ static void tratarRequisicao(
             "{\"status\":\"ok\","
             "\"mensagem\":\"Servidor C funcionando!\"}\n"
         );
-    } else if (mg_match(
-        requisicao->uri, mg_str("/api/encomendas/historico"), NULL
+    } else if (
+        mg_match(requisicao->uri, mg_str("/api/funcionarios"), NULL)
+    ) {
+        if (mg_match(requisicao->method, mg_str("GET"), NULL)) {
+            listarFuncionarios(c);
+        } else {
+            mg_http_reply(
+                c, 405, "Content-Type: application/json; charset=utf-8\r\n",
+                "{\"erro\":\"Método não permitido.\"}\n"
+            );
+        }
+    } else if (
+        mg_match(requisicao->uri, mg_str("/api/encomendas/historico"), NULL
     )) {
         if (mg_match(requisicao->method, mg_str("GET"), NULL)) {
             listarHistoricoEncomenda(c, requisicao);

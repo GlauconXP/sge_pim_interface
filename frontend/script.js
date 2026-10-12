@@ -1,40 +1,22 @@
-const employees = [
-  {
-    id: "001234",
-    name: "João Silva",
-    role: "Atendente",
-    sector: "Triagem",
-    active: true,
-  },
-  {
-    id: "002345",
-    name: "Maria Oliveira",
-    role: "Conferente",
-    sector: "Separação",
-    active: true,
-  },
-  {
-    id: "003456",
-    name: "Carlos Souza",
-    role: "Entregador",
-    sector: "Distribuição",
-    active: true,
-  },
-  {
-    id: "004567",
-    name: "Ana Lima",
-    role: "Supervisora",
-    sector: "Operacional",
-    active: true,
-  },
-  {
-    id: "005678",
-    name: "Pedro Costa",
-    role: "Administrativo",
-    sector: "Financeiro",
-    active: false,
-  },
-];
+let employees = [];
+
+async function carregarFuncionariosDoBanco() {
+  const resposta = await fetch("/api/funcionarios");
+  if (!resposta.ok) {
+    throw new Error("Não foi possível consultar os funcionários no banco de dados.");
+  }
+  const dados = await resposta.json();
+  if (!Array.isArray(dados)) {
+    throw new Error("A resposta da lista de funcionários é inválida.");
+  }
+  employees = dados.map((item) => ({
+    id: String(item.matricula ?? ""),
+    name: item.nome ?? "Não informado",
+    role: item.cargo ?? "",
+    sector: item.setor ?? "",
+    active: item.ativo === true,
+  }));
+}
 const flow = ["Recebida", "Em triagem", "Separada", "Em distribuição", "Entregue"];
 let orders = [];
 
@@ -56,7 +38,7 @@ async function carregarEncomendasDoBanco() {
     recipient: item.destinatario ?? "Não informado",
     destination: item.cidade ?? "Não informado",
     status: item.status ?? "Recebida",
-    owner: "—",
+    owner: item.responsavel ?? "—",
     date: "—",
     address: "",
     type: "—",
@@ -87,7 +69,10 @@ async function enter() {
   app.classList.remove("hidden");
 
   try {
-    await carregarEncomendasDoBanco();
+    await Promise.all([
+      carregarEncomendasDoBanco(),
+      carregarFuncionariosDoBanco(),
+    ]);
     renderAll();
   } catch (erro) {
     console.error("Erro ao carregar encomendas:", erro);
@@ -182,13 +167,24 @@ function renderEmployees() {
   document.getElementById("employeesTable").innerHTML = employees
     .map(
       (e) =>
-        `<tr><td>${e.id}</td><td>${e.name}</td><td>${e.role}</td><td>${e.sector}</td><td>${e.active ? badge("Entregue") : '<span class="badge b1">Inativo</span>'}</td></tr>`,
+        `<tr><td>${escaparHtml(e.id)}</td><td>${escaparHtml(e.name)}</td><td>${escaparHtml(e.role)}</td><td>${escaparHtml(e.sector)}</td><td>${e.active ? '<span class="badge b4">Ativo</span>' : '<span class="badge b1">Inativo</span>'}</td></tr>`,
     )
     .join("");
-  document.getElementById("owner").innerHTML = employees
-    .filter((e) => e.active)
-    .map((e) => `<option>${e.name}</option>`)
-    .join("");
+
+  const seletor = document.getElementById("owner");
+  const valorAnterior = seletor.value;
+  seletor.innerHTML =
+    '<option value="">Sem responsável</option>' +
+    employees
+      .filter((e) => e.active)
+      .map(
+        (e) =>
+          `<option value="${escaparHtml(e.id)}">${escaparHtml(e.name)} — ${escaparHtml(e.sector)}</option>`,
+      )
+      .join("");
+  if ([...seletor.options].some((opcao) => opcao.value === valorAnterior)) {
+    seletor.value = valorAnterior;
+  }
 }
 function renderAll() {
   renderDash();
@@ -268,6 +264,7 @@ document.getElementById("packageForm").addEventListener("submit", async (e) => {
     type: String(dados.get("type") ?? "SEDEX"),
     status: String(dados.get("status") ?? "Recebida"),
     priority: String(dados.get("priority") ?? "Normal"),
+    ownerMatricula: String(dados.get("owner") ?? "").trim(),
   };
 
   try {

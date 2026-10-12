@@ -1,20 +1,36 @@
-CORREÇÃO DO BOTÃO AVANÇAR — SGE
+SGE - Vincular funcionário responsável à encomenda
 
-Causa identificada:
-O ODBC retorna SQL_NO_DATA (código 100) quando o INSERT ... SELECT que tenta registrar o status anterior não insere nenhuma linha. Isso é normal quando a encomenda já tem histórico. O código anterior tratava esse resultado esperado como falha.
+Esta atualização altera somente:
+- backend/src/server.c
+- frontend/script.js
+- docs/seed_funcionarios_demo.sql
 
-Instalação:
+PASSO 1 - Preparar funcionários no banco
+1. Abra o SQL Server Management Studio (SSMS).
+2. Abra docs/seed_funcionarios_demo.sql.
+3. Confirme que o banco selecionado é SGE_Encomendas.
+4. Execute o script (F5). Ele insere os cinco funcionários de demonstração apenas se suas matrículas ainda não existirem. Não altera cadastros existentes.
+
+PASSO 2 - Substituir arquivos
 1. Pare o servidor com Ctrl+C.
 2. Extraia este ZIP na raiz do projeto sge_pim_interface.
-3. Substitua backend/src/server.c quando solicitado.
-4. Recompile na raiz do projeto usando PowerShell:
+3. Autorize substituir backend/src/server.c e frontend/script.js.
+4. Não substitua nem apague a pasta .git.
+
+PASSO 3 - Recompilar e executar
+Na raiz do projeto, no PowerShell do VS Code:
 
 New-Item -ItemType Directory -Force .\build | Out-Null
 gcc -D_POSIX_C_SOURCE=200000L .\backend\src\server.c .\backend\third_party\mongoose\mongoose.c -I.\backend\third_party\mongoose -o .\build\sge_server.exe -lws2_32 -lodbc32
 
-5. Inicie:
+Se a compilação terminar sem erros:
+
 .\build\sge_server.exe
 
-6. Atualize o navegador com Ctrl+F5 e teste Avançar uma vez.
+PASSO 4 - Testar
+1. Abra http://127.0.0.1:8000 e entre no sistema.
+2. Confira se a página Funcionários lista os funcionários vindos do SQL Server.
+3. Cadastre uma encomenda de teste e escolha um funcionário responsável.
+4. Confira se o nome aparece na coluna Responsável depois do cadastro e após atualizar a página.
 
-Este ZIP só contém o servidor C corrigido e estas instruções. A compilação e o teste com SQL Server devem ser confirmados no Windows local.
+Observação: as encomendas já cadastradas anteriormente sem responsável continuarão sem responsável (—). Esta atualização não atribui funcionários automaticamente às encomendas antigas.
