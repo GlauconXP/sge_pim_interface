@@ -73,3 +73,33 @@
     align-items: flex-start;
   }
 }
+
+
+/* Autenticacao de contas e troca obrigatoria de senha inicial. */
+.password-modal-card {
+  width: min(460px, calc(100vw - 28px));
+  max-height: calc(100vh - 28px);
+  overflow-y: auto;
+}
+.password-modal-card > p,
+.login-hint {
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.5;
+}
+.login-hint {
+  display: block;
+  text-align: center;
+  margin-top: 8px;
+}
+#passwordForm .form-actions {
+  margin-top: 20px;
+}
+#passwordForm .primary {
+  width: 100%;
+}
+#loginForm button:disabled,
+#passwordForm button:disabled {
+  opacity: .65;
+  cursor: wait;
+}

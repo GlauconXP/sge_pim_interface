@@ -25,7 +25,7 @@
         <label>Matrícula<input id="user" required placeholder="Ex.: 001234"></label>
         <label>Senha<input id="pass" type="password" required placeholder="Digite sua senha"></label>
         <button class="btn primary" type="submit">Entrar</button>
-        <button class="link" type="button" id="demo">Entrar com usuário de demonstração</button>
+        <button class="link" type="button" id="demo">Preencher conta de demonstração</button><small class="login-hint">A senha temporária será solicitada para troca no primeiro acesso.</small>
         <div id="loginError" class="error"></div>
       </form>
     </div>
@@ -44,7 +44,7 @@
         </nav>
       </div>
       <div>
-        <div class="user"><span>JS</span><div><b>João Silva</b><small>Funcionário</small></div></div>
+        <div class="user"><span>SGE</span><div><b id="loggedEmployeeName">Funcionário</b><small>Autenticado</small></div></div>
         <button class="nav" id="logout">↪ <span>Sair</span></button>
       </div>
     </aside>
@@ -53,7 +53,7 @@
       <header class="topbar"><div><small>SISTEMA DE GESTÃO</small><h1 id="title">Dashboard</h1></div><span class="online">● Sistema online</span></header>
 
       <section id="page-dashboard" class="page active">
-        <div class="page-head"><div><h2>Olá, João!</h2><p>Resumo das encomendas da unidade.</p></div><button class="btn primary" data-go="cadastro">＋ Nova encomenda</button></div>
+        <div class="page-head"><div><h2>Olá, <span id="greetingName">Funcionário</span>!</h2><p>Resumo das encomendas da unidade.</p></div><button class="btn primary" data-go="cadastro">＋ Nova encomenda</button></div>
         <div class="stats">
           <article><small>Recebidas</small><strong>128</strong><span>Últimas 24 horas</span></article>
           <article><small>Em triagem</small><strong>32</strong><span>Precisam de processamento</span></article>
@@ -106,7 +106,7 @@
         </div>
         <div>
           <label>Situação<select name="ativo" required><option value="true">Ativo</option><option value="false">Inativo</option></select></label>
-          <div class="employee-form-help">Funcionários inativos não podem ser escolhidos como responsáveis por novas encomendas.</div>
+          <label>Senha inicial / redefinir senha<input name="senha" type="password" minlength="10" maxlength="128" autocomplete="new-password" placeholder="Mínimo de 10 caracteres"><small class="employee-form-help" id="employeePasswordHelp">Obrigatória ao cadastrar. Ao editar, deixe vazia para manter a senha atual.</small></label>
         </div>
         <div class="form-actions">
           <button id="cancelEmployeeModal" class="btn secondary" type="button">Cancelar</button>
@@ -118,6 +118,22 @@
   </div>
 
   <div id="modal" class="modal hidden"><div class="backdrop"></div><div class="modal-card"><button id="closeModal" class="close">×</button><small>CONSULTA DE ENCOMENDA</small><h3 id="modalCode"></h3><div id="modalBody"></div></div></div>
+
+  <div id="passwordModal" class="modal hidden">
+    <div class="backdrop password-backdrop"></div>
+    <div class="modal-card password-modal-card" role="dialog" aria-modal="true" aria-labelledby="passwordModalTitle">
+      <small>SEGURANÇA DA CONTA</small>
+      <h3 id="passwordModalTitle">Defina sua nova senha</h3>
+      <p>Esta conta usa uma senha temporária. Troque-a para continuar.</p>
+      <form id="passwordForm" class="form">
+        <label>Senha atual<input id="currentPassword" type="password" required autocomplete="current-password"></label>
+        <label>Nova senha<input id="newPassword" type="password" required minlength="10" maxlength="128" autocomplete="new-password"></label>
+        <label>Confirme a nova senha<input id="confirmPassword" type="password" required minlength="10" maxlength="128" autocomplete="new-password"></label>
+        <div class="form-actions"><button class="btn primary" type="submit" id="savePasswordButton">Salvar nova senha</button></div>
+        <div id="passwordFormMessage" class="error" role="alert"></div>
+      </form>
+    </div>
+  </div>
   <script src="script.js"></script>
 </body>
 </html>

@@ -1,0 +1,47 @@
+SGE — LOGIN REAL COM TROCA OBRIGATÓRIA DA SENHA TEMPORÁRIA
+
+IMPORTANTE
+Esta implementação é para o protótipo acadêmico local do SGE. O servidor continua ouvindo apenas em 127.0.0.1. Não exponha esse servidor diretamente à Internet; produção exige HTTPS, controles de permissão por função, proteção contra tentativas automatizadas, gestão de segredo e revisão de segurança.
+
+ARQUIVOS
+- backend/src/server.c: API de login, sessões com cookie HttpOnly, validação de conta ativa, troca obrigatória de senha e proteção das demais rotas /api/.
+- frontend/script.js / index.html / style.css: login real e formulário de troca de senha.
+- docs/auth_setup.sql: acrescenta campos de credenciais e configura senhas temporárias dos cinco usuários de demonstração sem sobrescrever hashes existentes.
+
+INSTALAÇÃO
+1. Faça uma cópia de segurança do projeto.
+2. Extraia os arquivos do ZIP na raiz do projeto sge_pim_interface, substituindo os correspondentes. Preserve .git.
+3. No SQL Server Management Studio (SSMS), abra docs/auth_setup.sql e execute com F5 no banco SGE_Encomendas.
+4. Confira no resultado se os usuários demo estão com "Trocar no primeiro acesso".
+5. Pare o servidor atual com Ctrl+C.
+6. No PowerShell, aberto na raiz do projeto, compile:
+
+   gcc -D_POSIX_C_SOURCE=200000L .\backend\src\server.c .\backend\third_party\mongoose\mongoose.c -I.\backend\third_party\mongoose -o .\build\sge_server.exe -lws2_32 -lodbc32 -lbcrypt
+
+7. Inicie:
+
+   .\build\sge_server.exe
+
+8. Abra http://127.0.0.1:8000 e pressione Ctrl+F5.
+
+CREDENCIAL TEMPORÁRIA DE DEMONSTRAÇÃO
+Matrícula: 001234
+Senha temporária: Trocar@SGE2026!
+
+No primeiro acesso, o sistema pede a troca obrigatória da senha. Essa senha temporária é igual para as contas de demonstração abaixo e deve ser alterada no primeiro login. Matrículas de demonstração configuradas pelo script: 001234, 002345, 003456, 004567 e 005678. A conta 005678 está inativa e não poderá entrar.
+
+NOVOS FUNCIONÁRIOS
+No modal Novo funcionário, informe uma senha inicial com pelo menos 10 caracteres. O novo funcionário será obrigado a trocá-la no primeiro login. Ao editar um funcionário, deixe o campo de senha vazio para preservar a senha atual; preenchê-lo redefine a senha e exige troca no próximo acesso.
+
+TESTE
+1. Antes de entrar, a tentativa de consultar /api/encomendas diretamente deve retornar 401.
+2. Use o botão "Preencher conta de demonstração" e clique Entrar.
+3. Troque a senha temporária por uma nova senha de pelo menos 10 caracteres.
+4. Confirme que o dashboard carrega, atualize o navegador e verifique que a sessão continua válida enquanto o servidor estiver rodando.
+5. Clique Sair e confirme que a tela de login volta; sem sessão, as APIs protegidas devem retornar 401.
+
+NOTAS TÉCNICAS
+- Senhas são armazenadas como PBKDF2-HMAC-SHA256 com salt aleatório de 16 bytes e 150.000 iterações; o hash tem 32 bytes. A derivação usa Windows CNG (bcrypt), portanto a compilação agora precisa de -lbcrypt.
+- Sessões são aleatórias, em memória, usam cookie HttpOnly/SameSite=Strict e expiram após 8 horas de inatividade. Reiniciar o servidor encerra todas as sessões.
+- O cookie não recebe o atributo Secure porque o protótipo usa HTTP em loopback local. Não use este ajuste em serviço público/produção sem HTTPS e revisão adicional.
+- Contas existentes fora das cinco matrículas de demonstração continuarão sem senha se o hash estiver NULL. Entre com a conta de demonstração e edite cada conta sem credencial para definir uma senha inicial.

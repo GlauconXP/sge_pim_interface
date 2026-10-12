@@ -64,49 +64,137 @@ const escaparHtml = (valor) =>
 const badge = (s) => `<span class="badge ${statusClass(s)}">${escaparHtml(s)}</span>`;
 const login = document.getElementById("login"),
   app = document.getElementById("app");
-async function enter() {
-  login.classList.add("hidden");
-  app.classList.remove("hidden");
+let sessaoAtual = null;
 
+async function entrarNaAplicacao(sessao) {
   try {
-    await Promise.all([
-      carregarEncomendasDoBanco(),
-      carregarFuncionariosDoBanco(),
-    ]);
+    await Promise.all([carregarEncomendasDoBanco(), carregarFuncionariosDoBanco()]);
+    sessaoAtual = sessao;
+    login.classList.add("hidden");
+    app.classList.remove("hidden");
+    document.getElementById("loggedEmployeeName").textContent = sessao.nome || "Funcionário";
+    document.getElementById("greetingName").textContent = (sessao.nome || "Funcionário").split(" ")[0];
     renderAll();
   } catch (erro) {
-    console.error("Erro ao carregar encomendas:", erro);
-
-    orders = [];
-    renderAll();
-
-    alert(
-      "Não foi possível carregar as encomendas. " +
-      "Confira se o servidor C está funcionando."
-    );
+    console.error("Erro ao carregar dados após login:", erro);
+    document.getElementById("loginError").textContent = erro.message || "Não foi possível abrir o sistema.";
+    await fetch("/api/logout", { method: "POST" }).catch(() => {});
+    sessaoAtual = null;
+    login.classList.remove("hidden");
+    app.classList.add("hidden");
   }
 }
-document.getElementById("loginForm").addEventListener("submit", (e) => {
+
+function abrirTrocaSenhaObrigatoria(sessao) {
+  sessaoAtual = sessao;
+  document.getElementById("passwordForm").reset();
+  document.getElementById("passwordFormMessage").textContent = "";
+  document.getElementById("passwordModal").classList.remove("hidden");
+}
+
+async function fazerLogin(matricula, senha) {
+  const mensagem = document.getElementById("loginError");
+  const botao = document.querySelector('#loginForm button[type="submit"]');
+  mensagem.textContent = "Validando credenciais...";
+  botao.disabled = true;
+  try {
+    const resposta = await fetch("/api/login", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ matricula: matricula.trim(), senha }),
+    });
+    let dados = {};
+    try { dados = await resposta.json(); } catch (_) {}
+    if (!resposta.ok) throw new Error(dados.erro || "Não foi possível entrar no sistema.");
+    mensagem.textContent = "";
+    sessaoAtual = dados;
+    if (dados.trocarSenha) abrirTrocaSenhaObrigatoria(dados);
+    else await entrarNaAplicacao(dados);
+  } catch (erro) {
+    console.error("Falha de login:", erro);
+    mensagem.textContent = erro.message || "Não foi possível entrar no sistema.";
+  } finally {
+    botao.disabled = false;
+  }
+}
+
+document.getElementById("loginForm").addEventListener("submit", async (e) => {
   e.preventDefault();
-  if (
-    !document.getElementById("user").value ||
-    !document.getElementById("pass").value
-  ) {
-    document.getElementById("loginError").textContent =
-      "Preencha matrícula e senha.";
+  const matricula = document.getElementById("user").value.trim();
+  const senha = document.getElementById("pass").value;
+  if (!matricula || !senha) {
+    document.getElementById("loginError").textContent = "Preencha matrícula e senha.";
     return;
   }
-  enter();
+  await fazerLogin(matricula, senha);
 });
+
 document.getElementById("demo").onclick = () => {
   document.getElementById("user").value = "001234";
-  document.getElementById("pass").value = "1234";
-  enter();
+  document.getElementById("pass").value = "Trocar@SGE2026!";
+  document.getElementById("loginError").textContent = "Conta de demonstração preenchida. No primeiro acesso, será necessário trocar a senha.";
 };
-document.getElementById("logout").onclick = () => {
+
+document.getElementById("passwordForm").addEventListener("submit", async (evento) => {
+  evento.preventDefault();
+  const mensagem = document.getElementById("passwordFormMessage");
+  const atual = document.getElementById("currentPassword").value;
+  const nova = document.getElementById("newPassword").value;
+  const confirmacao = document.getElementById("confirmPassword").value;
+  if (nova.length < 10) {
+    mensagem.textContent = "A nova senha deve ter pelo menos 10 caracteres.";
+    return;
+  }
+  if (nova !== confirmacao) {
+    mensagem.textContent = "A confirmação não corresponde à nova senha.";
+    return;
+  }
+  const botao = document.getElementById("savePasswordButton");
+  botao.disabled = true;
+  mensagem.textContent = "Atualizando senha...";
+  try {
+    const resposta = await fetch("/api/senha", {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ senhaAtual: atual, novaSenha: nova }),
+    });
+    let dados = {};
+    try { dados = await resposta.json(); } catch (_) {}
+    if (!resposta.ok) throw new Error(dados.erro || "Não foi possível alterar a senha.");
+    sessaoAtual.trocarSenha = false;
+    document.getElementById("passwordModal").classList.add("hidden");
+    document.getElementById("pass").value = "";
+    await entrarNaAplicacao(sessaoAtual);
+  } catch (erro) {
+    mensagem.textContent = erro.message || "Não foi possível alterar a senha.";
+  } finally {
+    botao.disabled = false;
+  }
+});
+
+document.getElementById("logout").onclick = async () => {
+  try { await fetch("/api/logout", { method: "POST" }); } catch (_) {}
+  sessaoAtual = null;
+  orders = [];
+  employees = [];
   app.classList.add("hidden");
   login.classList.remove("hidden");
+  document.getElementById("loginForm").reset();
+  document.getElementById("loginError").textContent = "";
 };
+
+async function restaurarSessao() {
+  try {
+    const resposta = await fetch("/api/me", { cache: "no-store" });
+    if (!resposta.ok) return;
+    const sessao = await resposta.json();
+    sessaoAtual = sessao;
+    if (sessao.trocarSenha) abrirTrocaSenhaObrigatoria(sessao);
+    else await entrarNaAplicacao(sessao);
+  } catch (_) {
+    // Sem sessão ativa: mantém a tela de login visível.
+  }
+}
 function navigate(p) {
   document
     .querySelectorAll(".page")
@@ -355,7 +443,7 @@ document.getElementById("quickTrack").onclick = () => {
 };
 document.getElementById("closeModal").onclick = () =>
   document.getElementById("modal").classList.add("hidden");
-document.querySelector(".backdrop").onclick = () =>
+document.querySelector("#modal .backdrop").onclick = () =>
   document.getElementById("modal").classList.add("hidden");
 document.getElementById("refresh").onclick = () =>
   (document.getElementById("delivery").textContent =
@@ -384,6 +472,11 @@ function abrirModalFuncionario(matricula = null) {
   form.elements.namedItem("cargo").value = funcionario ? funcionario.role : "";
   form.elements.namedItem("setor").value = funcionario ? funcionario.sector : "";
   form.elements.namedItem("ativo").value = funcionario ? String(funcionario.active) : "true";
+  form.elements.namedItem("senha").value = "";
+  form.elements.namedItem("senha").required = !funcionario;
+  document.getElementById("employeePasswordHelp").textContent = funcionario
+    ? "Opcional ao editar. Se preenchida, a senha será redefinida e deverá ser trocada no próximo login."
+    : "Obrigatória ao cadastrar, com pelo menos 10 caracteres. Será trocada no primeiro login.";
   document.getElementById("employeeModal").classList.remove("hidden");
 }
 
@@ -411,10 +504,15 @@ document.getElementById("employeeForm").addEventListener("submit", async (evento
     cargo: String(dados.get("cargo") ?? "").trim(),
     setor: String(dados.get("setor") ?? "").trim(),
     ativo: String(dados.get("ativo")) === "true",
+    senha: String(dados.get("senha") ?? ""),
   };
 
   if (!payload.matricula || !payload.nome || !payload.cargo || !payload.setor) {
     mensagem.textContent = "Preencha todos os campos antes de salvar.";
+    return;
+  }
+  if ((!editando || payload.senha) && payload.senha.length < 10) {
+    mensagem.textContent = "A senha deve ter pelo menos 10 caracteres.";
     return;
   }
 
@@ -481,3 +579,4 @@ async function alternarSituacaoFuncionario(matricula) {
 }
 
 navigate("dashboard");
+restaurarSessao();
