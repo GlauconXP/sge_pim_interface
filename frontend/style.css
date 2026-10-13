@@ -103,3 +103,5 @@
   opacity: .65;
   cursor: wait;
 }
+
+.muted-action{font-size:11px;color:var(--muted);}

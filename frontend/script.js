@@ -66,10 +66,59 @@ const login = document.getElementById("login"),
   app = document.getElementById("app");
 let sessaoAtual = null;
 
+function normalizarCargo(cargo) {
+  return String(cargo ?? "")
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .trim()
+    .toLowerCase();
+}
+
+function obterPermissoes() {
+  const cargo = normalizarCargo(sessaoAtual?.cargo);
+  const gerenciaFuncionarios = ["supervisora", "supervisor", "administrador"].includes(cargo);
+  return {
+    gerenciaFuncionarios,
+    cadastraEncomendas: gerenciaFuncionarios || cargo === "atendente",
+    avancarPara(status) {
+      if (gerenciaFuncionarios) return true;
+      if (cargo === "conferente") return ["Em triagem", "Separada"].includes(status);
+      if (cargo === "entregador") return ["Em distribuição", "Entregue"].includes(status);
+      return false;
+    },
+    veRelatorios: gerenciaFuncionarios || cargo === "administrativo",
+  };
+}
+
+function aplicarPermissoes() {
+  const permissoes = obterPermissoes();
+  const ocultar = (seletor, visivel) => {
+    document.querySelectorAll(seletor).forEach((elemento) => {
+      elemento.classList.toggle("hidden", !visivel);
+    });
+  };
+  ocultar('[data-page="funcionarios"]', permissoes.gerenciaFuncionarios);
+  ocultar('[data-page="cadastro"], [data-go="cadastro"]', permissoes.cadastraEncomendas);
+  ocultar('[data-page="relatorios"], [data-go="relatorios"]', permissoes.veRelatorios);
+  document.getElementById("newEmployee").classList.toggle("hidden", !permissoes.gerenciaFuncionarios);
+  const perfil = document.querySelector(".user small");
+  if (perfil) perfil.textContent = sessaoAtual?.cargo || "Funcionário";
+  if (!permissoes.gerenciaFuncionarios && document.getElementById("page-funcionarios").classList.contains("active")) {
+    navigate("dashboard");
+  }
+  if (!permissoes.cadastraEncomendas && document.getElementById("page-cadastro").classList.contains("active")) {
+    navigate("dashboard");
+  }
+  if (!permissoes.veRelatorios && document.getElementById("page-relatorios").classList.contains("active")) {
+    navigate("dashboard");
+  }
+}
+
 async function entrarNaAplicacao(sessao) {
   try {
     await Promise.all([carregarEncomendasDoBanco(), carregarFuncionariosDoBanco()]);
     sessaoAtual = sessao;
+    aplicarPermissoes();
     login.classList.add("hidden");
     app.classList.remove("hidden");
     document.getElementById("loggedEmployeeName").textContent = sessao.nome || "Funcionário";
@@ -196,6 +245,13 @@ async function restaurarSessao() {
   }
 }
 function navigate(p) {
+  const permissoes = obterPermissoes();
+  if ((p === "funcionarios" && !permissoes.gerenciaFuncionarios) ||
+      (p === "cadastro" && !permissoes.cadastraEncomendas) ||
+      (p === "relatorios" && !permissoes.veRelatorios)) {
+    alert("Seu cargo não tem permissão para acessar essa área.");
+    return;
+  }
   document
     .querySelectorAll(".page")
     .forEach((x) => x.classList.remove("active"));
@@ -234,11 +290,19 @@ function renderOrders() {
       (f === "Todos" || o.status === f) &&
       `${o.code} ${o.recipient} ${o.destination}`.toLowerCase().includes(q),
   );
+  const permissoes = obterPermissoes();
   document.getElementById("ordersTable").innerHTML = rows
-    .map(
-      (o) =>
-        `<tr><td>${o.code}</td><td>${o.recipient}</td><td>${o.destination}</td><td>${badge(o.status)}</td><td>${o.owner}</td><td><button class="link track" data-code="${o.code}">Ver</button> · ${o.status === "Entregue" ? '<button class="link" disabled>Concluída</button>' : `<button class="link advance" data-code="${o.code}">Avançar</button>`}</td></tr>`,
-    )
+    .map((o) => {
+      const indice = flow.indexOf(o.status);
+      const proximoStatus = indice >= 0 ? flow[indice + 1] : null;
+      const podeAvancar = proximoStatus && permissoes.avancarPara(proximoStatus);
+      const acaoStatus = o.status === "Entregue"
+        ? '<button class="link" disabled>Concluída</button>'
+        : podeAvancar
+          ? `<button class="link advance" data-code="${escaparHtml(o.code)}">Avançar</button>`
+          : '<span class="muted-action">Sem permissão para avançar</span>';
+      return `<tr><td>${escaparHtml(o.code)}</td><td>${escaparHtml(o.recipient)}</td><td>${escaparHtml(o.destination)}</td><td>${badge(o.status)}</td><td>${escaparHtml(o.owner)}</td><td><button class="link track" data-code="${escaparHtml(o.code)}">Ver</button> · ${acaoStatus}</td></tr>`;
+    })
     .join("");
   document
     .querySelectorAll(".track")
@@ -252,11 +316,14 @@ function renderOrders() {
   });
 }
 function renderEmployees() {
+  const podeGerenciar = obterPermissoes().gerenciaFuncionarios;
   document.getElementById("employeesTable").innerHTML = employees
-    .map(
-      (e) =>
-        `<tr><td>${escaparHtml(e.id)}</td><td>${escaparHtml(e.name)}</td><td>${escaparHtml(e.role)}</td><td>${escaparHtml(e.sector)}</td><td>${e.active ? '<span class="badge b4">Ativo</span>' : '<span class="badge b1">Inativo</span>'}</td><td class="employee-actions"><button class="link employee-edit" data-matricula="${escaparHtml(e.id)}">Editar</button><button class="link employee-toggle" data-matricula="${escaparHtml(e.id)}">${e.active ? "Inativar" : "Ativar"}</button></td></tr>`,
-    )
+    .map((e) => {
+      const acoes = podeGerenciar
+        ? `<td class="employee-actions"><button class="link employee-edit" data-matricula="${escaparHtml(e.id)}">Editar</button><button class="link employee-toggle" data-matricula="${escaparHtml(e.id)}">${e.active ? "Inativar" : "Ativar"}</button></td>`
+        : "<td>Consulta</td>";
+      return `<tr><td>${escaparHtml(e.id)}</td><td>${escaparHtml(e.name)}</td><td>${escaparHtml(e.role)}</td><td>${escaparHtml(e.sector)}</td><td>${e.active ? '<span class="badge b4">Ativo</span>' : '<span class="badge b1">Inativo</span>'}</td>${acoes}</tr>`;
+    })
     .join("");
 
   document.querySelectorAll(".employee-edit").forEach((botao) => {

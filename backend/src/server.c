@@ -24,11 +24,53 @@ typedef struct {
     SQLINTEGER funcionarioId;
     char matricula[21];
     char nome[301];
+    char cargo[201];
     bool senhaDeveTrocar;
     time_t ultimaAtividade;
 } SessaoSGE;
 
 static SessaoSGE sessoesSGE[MAX_SESSOES];
+
+/* Permissões por cargo são verificadas no servidor, não apenas na interface. */
+static int cargoEh(const SessaoSGE *sessao, const char *cargo) {
+    return sessao != NULL && _stricmp(sessao->cargo, cargo) == 0;
+}
+
+static int podeGerenciarFuncionarios(const SessaoSGE *sessao) {
+    return cargoEh(sessao, "Supervisora") ||
+           cargoEh(sessao, "Supervisor") ||
+           cargoEh(sessao, "Administrador");
+}
+
+static int podeCadastrarEncomendas(const SessaoSGE *sessao) {
+    return podeGerenciarFuncionarios(sessao) || cargoEh(sessao, "Atendente");
+}
+
+static int podeAvancarPara(const SessaoSGE *sessao, const char *novoStatus) {
+    if (podeGerenciarFuncionarios(sessao)) return 1;
+    if (cargoEh(sessao, "Conferente")) {
+        return strcmp(novoStatus, "Em triagem") == 0 ||
+               strcmp(novoStatus, "Separada") == 0;
+    }
+    if (cargoEh(sessao, "Entregador")) {
+        return strcmp(novoStatus, "Em distribuição") == 0 ||
+               strcmp(novoStatus, "Entregue") == 0;
+    }
+    return 0;
+}
+
+static int transicaoStatusValida(const char *atual, const char *novo) {
+    return (strcmp(atual, "Recebida") == 0 && strcmp(novo, "Em triagem") == 0) ||
+           (strcmp(atual, "Em triagem") == 0 && strcmp(novo, "Separada") == 0) ||
+           (strcmp(atual, "Separada") == 0 && strcmp(novo, "Em distribuição") == 0) ||
+           (strcmp(atual, "Em distribuição") == 0 && strcmp(novo, "Entregue") == 0);
+}
+
+static void responderAcessoNegado(struct mg_connection *c) {
+    mg_http_reply(c, 403,
+        "Content-Type: application/json; charset=utf-8\r\n",
+        "{\"erro\":\"Seu cargo não tem permissão para realizar esta operação.\"}\n");
+}
 
 static int gerarSaltSenha(unsigned char salt[TAMANHO_SALT]) {
     return BCryptGenRandom(NULL, salt, TAMANHO_SALT,
@@ -83,7 +125,7 @@ static int gerarTokenSessao(char token[65]) {
 }
 
 static SessaoSGE *criarSessao(SQLINTEGER id, const char *matricula,
-                              const char *nome, bool deveTrocar) {
+                              const char *nome, const char *cargo, bool deveTrocar) {
     time_t agora = time(NULL);
     SessaoSGE *livre = NULL;
     for (int i = 0; i < MAX_SESSOES; i++) {
@@ -97,6 +139,7 @@ static SessaoSGE *criarSessao(SQLINTEGER id, const char *matricula,
     livre->funcionarioId = id;
     snprintf(livre->matricula, sizeof(livre->matricula), "%s", matricula);
     snprintf(livre->nome, sizeof(livre->nome), "%s", nome);
+    snprintf(livre->cargo, sizeof(livre->cargo), "%s", cargo != NULL ? cargo : "");
     livre->senhaDeveTrocar = deveTrocar;
     livre->ultimaAtividade = agora;
     return livre;
@@ -1119,7 +1162,8 @@ static int statusPermitido(const char *status) {
 /* Atualiza o status e grava uma movimentação na mesma transação. */
 static void atualizarStatusEncomenda(
     struct mg_connection *c,
-    struct mg_http_message *requisicao
+    struct mg_http_message *requisicao,
+    SessaoSGE *sessao
 ) {
     SQLHSTMT consulta = SQL_NULL_HSTMT;
     SQLRETURN resultado;
@@ -1128,6 +1172,7 @@ static void atualizarStatusEncomenda(
     const char *etapa = "validar os dados da requisição";
     SQLWCHAR codigo[64] = {0};
     SQLWCHAR status[61] = {0};
+    char statusDesejadoTexto[61] = {0};
     SQLLEN tamanhoCodigo = SQL_NTS;
     SQLLEN tamanhoStatus = SQL_NTS;
     struct mg_str corpo = requisicao->body;
@@ -1139,6 +1184,12 @@ static void atualizarStatusEncomenda(
             c, 400, "Content-Type: application/json; charset=utf-8\r\n",
             "{\"erro\":\"Status ausente ou inválido.\"}\n"
         );
+        return;
+    }
+    snprintf(statusDesejadoTexto, sizeof(statusDesejadoTexto), "%s", statusTexto);
+    if (!podeAvancarPara(sessao, statusTexto)) {
+        mg_free(statusTexto);
+        responderAcessoNegado(c);
         return;
     }
     mg_free(statusTexto);
@@ -1166,6 +1217,40 @@ static void atualizarStatusEncomenda(
         return;
     }
     transacaoAtiva = 1;
+
+    /* Confere a etapa atual no banco antes de permitir a próxima transição. */
+    SQLCHAR statusAtual[128] = {0};
+    SQLWCHAR statusAtualW[61] = {0};
+    SQLLEN indStatusAtual = 0;
+    etapa = "consultar o status atual da encomenda";
+    resultado = SQLAllocHandle(SQL_HANDLE_STMT, conexao, &consulta);
+    if (!SQL_SUCCEEDED(resultado)) goto erro_sql_status;
+    {
+        SQLCHAR sql[] = "SELECT Status FROM dbo.Encomendas WHERE Codigo = ?";
+        resultado = SQLPrepare(consulta, sql, SQL_NTS);
+    }
+    if (!SQL_SUCCEEDED(resultado)) goto erro_sql_status;
+    etapa = "vincular o código para consultar o status atual";
+    resultado = SQLBindParameter(consulta, 1, SQL_PARAM_INPUT, SQL_C_WCHAR,
+        SQL_WVARCHAR, 30, 0, codigo, sizeof(codigo), &tamanhoCodigo);
+    if (!SQL_SUCCEEDED(resultado)) goto erro_sql_status;
+    etapa = "consultar o status atual no SQL Server";
+    resultado = SQLExecute(consulta);
+    if (!SQL_SUCCEEDED(resultado)) goto erro_sql_status;
+    resultado = SQLFetch(consulta);
+    if (resultado == SQL_NO_DATA) goto encomenda_nao_encontrada;
+    if (!SQL_SUCCEEDED(resultado)) goto erro_sql_status;
+    resultado = SQLGetData(consulta, 1, SQL_C_WCHAR, statusAtualW,
+        sizeof(statusAtualW), &indStatusAtual);
+    if (!SQL_SUCCEEDED(resultado) || indStatusAtual == SQL_NULL_DATA ||
+        !converterWideUtf8(statusAtualW, (char *) statusAtual, sizeof(statusAtual))) {
+        goto erro_sql_status;
+    }
+    SQLFreeHandle(SQL_HANDLE_STMT, consulta);
+    consulta = SQL_NULL_HSTMT;
+    if (!transicaoStatusValida((char *) statusAtual, statusDesejadoTexto)) {
+        goto transicao_invalida;
+    }
 
     /* Para encomendas antigas sem histórico, guarda o status anterior antes da atualização. */
     etapa = "preparar o registro do status anterior";
@@ -1289,6 +1374,18 @@ static void atualizarStatusEncomenda(
         c, 200, "Content-Type: application/json; charset=utf-8\r\n",
         "{\"mensagem\":\"Status atualizado e movimentação registrada.\"}\n"
     );
+    return;
+
+transicao_invalida:
+    if (consulta != SQL_NULL_HSTMT) {
+        SQLFreeHandle(SQL_HANDLE_STMT, consulta);
+        consulta = SQL_NULL_HSTMT;
+    }
+    SQLEndTran(SQL_HANDLE_DBC, conexao, SQL_ROLLBACK);
+    transacaoAtiva = 0;
+    SQLSetConnectAttr(conexao, SQL_ATTR_AUTOCOMMIT, (SQLPOINTER) SQL_AUTOCOMMIT_ON, 0);
+    mg_http_reply(c, 409, "Content-Type: application/json; charset=utf-8\r\n",
+        "{\"erro\":\"A encomenda só pode avançar para a próxima etapa do fluxo.\"}\n");
     return;
 
 encomenda_nao_encontrada:
@@ -1468,12 +1565,12 @@ static void autenticarUsuario(struct mg_connection *c, struct mg_http_message *r
     SQLHSTMT consulta = SQL_NULL_HSTMT;
     SQLRETURN resultado;
     struct mg_str corpo = requisicao->body;
-    SQLWCHAR matriculaW[21] = {0}, nomeW[151] = {0};
+    SQLWCHAR matriculaW[21] = {0}, nomeW[151] = {0}, cargoW[101] = {0};
     SQLINTEGER funcionarioId = 0;
     SQLCHAR ativo = 0, deveTrocar = 0;
     unsigned char salt[TAMANHO_SALT] = {0}, hashBanco[TAMANHO_HASH] = {0};
     unsigned char hashTentativa[TAMANHO_HASH] = {0};
-    SQLLEN indId = 0, indNome = 0, indAtivo = 0, indSalt = 0, indHash = 0, indTrocar = 0;
+    SQLLEN indId = 0, indNome = 0, indAtivo = 0, indSalt = 0, indHash = 0, indTrocar = 0, indCargo = 0;
     char *matricula = mg_json_get_str(corpo, "$.matricula");
     char *senha = mg_json_get_str(corpo, "$.senha");
 
@@ -1489,7 +1586,7 @@ static void autenticarUsuario(struct mg_connection *c, struct mg_http_message *r
 
     resultado = SQLAllocHandle(SQL_HANDLE_STMT, conexao, &consulta);
     if (!SQL_SUCCEEDED(resultado)) goto erro_autenticacao;
-    SQLCHAR sql[] = "SELECT Id, Nome, Ativo, SenhaSalt, SenhaHash, SenhaDeveTrocar "
+    SQLCHAR sql[] = "SELECT Id, Nome, Ativo, SenhaSalt, SenhaHash, SenhaDeveTrocar, COALESCE(Cargo, N'') "
                     "FROM dbo.Funcionarios WHERE Matricula = ?";
     resultado = SQLPrepare(consulta, sql, SQL_NTS);
     if (!SQL_SUCCEEDED(resultado)) goto erro_autenticacao;
@@ -1518,6 +1615,8 @@ static void autenticarUsuario(struct mg_connection *c, struct mg_http_message *r
     if (!SQL_SUCCEEDED(resultado)) goto erro_autenticacao;
     resultado = SQLGetData(consulta, 6, SQL_C_BIT, &deveTrocar, sizeof(deveTrocar), &indTrocar);
     if (!SQL_SUCCEEDED(resultado)) goto erro_autenticacao;
+    resultado = SQLGetData(consulta, 7, SQL_C_WCHAR, cargoW, sizeof(cargoW), &indCargo);
+    if (!SQL_SUCCEEDED(resultado)) goto erro_autenticacao;
     SQLFreeHandle(SQL_HANDLE_STMT, consulta);
     consulta = SQL_NULL_HSTMT;
 
@@ -1531,13 +1630,15 @@ static void autenticarUsuario(struct mg_connection *c, struct mg_http_message *r
     }
 
     char nomeUtf8[301] = {0};
-    if (!converterWideUtf8(nomeW, nomeUtf8, sizeof(nomeUtf8))) {
+    char cargoUtf8[201] = {0};
+    if (!converterWideUtf8(nomeW, nomeUtf8, sizeof(nomeUtf8)) ||
+        !converterWideUtf8(cargoW, cargoUtf8, sizeof(cargoUtf8))) {
         mg_free(matricula); mg_free(senha);
         mg_http_reply(c, 500, "Content-Type: application/json; charset=utf-8\r\n",
             "{\"erro\":\"Não foi possível ler o perfil do funcionário.\"}\n");
         return;
     }
-    SessaoSGE *sessao = criarSessao(funcionarioId, matricula, nomeUtf8, deveTrocar != 0);
+    SessaoSGE *sessao = criarSessao(funcionarioId, matricula, nomeUtf8, cargoUtf8, deveTrocar != 0);
     mg_free(matricula); mg_free(senha);
     if (sessao == NULL) {
         mg_http_reply(c, 503, "Content-Type: application/json; charset=utf-8\r\n",
@@ -1551,6 +1652,8 @@ static void autenticarUsuario(struct mg_connection *c, struct mg_http_message *r
     if (valido) valido = adicionarJson(json, sizeof(json), &posicao, sessao->matricula);
     if (valido) valido = adicionarTexto(json, sizeof(json), &posicao, ",\"nome\":");
     if (valido) valido = adicionarJson(json, sizeof(json), &posicao, sessao->nome);
+    if (valido) valido = adicionarTexto(json, sizeof(json), &posicao, ",\"cargo\":");
+    if (valido) valido = adicionarJson(json, sizeof(json), &posicao, sessao->cargo);
     if (valido) valido = adicionarTexto(json, sizeof(json), &posicao,
         sessao->senhaDeveTrocar ? ",\"trocarSenha\":true}" : ",\"trocarSenha\":false}");
     if (!valido) {
@@ -1586,6 +1689,8 @@ static void obterUsuarioAtual(struct mg_connection *c, SessaoSGE *sessao) {
     if (valido) valido = adicionarJson(json, sizeof(json), &posicao, sessao->matricula);
     if (valido) valido = adicionarTexto(json, sizeof(json), &posicao, ",\"nome\":");
     if (valido) valido = adicionarJson(json, sizeof(json), &posicao, sessao->nome);
+    if (valido) valido = adicionarTexto(json, sizeof(json), &posicao, ",\"cargo\":");
+    if (valido) valido = adicionarJson(json, sizeof(json), &posicao, sessao->cargo);
     if (valido) valido = adicionarTexto(json, sizeof(json), &posicao,
         sessao->senhaDeveTrocar ? ",\"trocarSenha\":true}" : ",\"trocarSenha\":false}");
     if (!valido) {
@@ -1777,11 +1882,14 @@ static void tratarRequisicao(
         mg_match(requisicao->uri, mg_str("/api/funcionarios"), NULL)
     ) {
         if (mg_match(requisicao->method, mg_str("GET"), NULL)) {
+            /* Todos os funcionários autenticados podem ler a lista para atribuir responsáveis. */
             listarFuncionarios(c);
         } else if (mg_match(requisicao->method, mg_str("POST"), NULL)) {
-            cadastrarFuncionario(c, requisicao);
+            if (!podeGerenciarFuncionarios(sessaoAtual)) responderAcessoNegado(c);
+            else cadastrarFuncionario(c, requisicao);
         } else if (mg_match(requisicao->method, mg_str("PUT"), NULL)) {
-            atualizarFuncionario(c, requisicao);
+            if (!podeGerenciarFuncionarios(sessaoAtual)) responderAcessoNegado(c);
+            else atualizarFuncionario(c, requisicao);
         } else {
             mg_http_reply(
                 c, 405, "Content-Type: application/json; charset=utf-8\r\n",
@@ -1803,7 +1911,7 @@ static void tratarRequisicao(
         requisicao->uri, mg_str("/api/encomendas/status"), NULL
     )) {
         if (mg_match(requisicao->method, mg_str("PUT"), NULL)) {
-            atualizarStatusEncomenda(c, requisicao);
+            atualizarStatusEncomenda(c, requisicao, sessaoAtual);
         } else {
             mg_http_reply(
                 c, 405, "Content-Type: application/json; charset=utf-8\r\n",
@@ -1819,7 +1927,8 @@ static void tratarRequisicao(
         mg_match(requisicao->uri, mg_str("/api/encomendas"), NULL) &&
         mg_match(requisicao->method, mg_str("POST"), NULL)
     ) {
-        cadastrarEncomenda(c, requisicao);
+        if (!podeCadastrarEncomendas(sessaoAtual)) responderAcessoNegado(c);
+        else cadastrarEncomenda(c, requisicao);
     } else if (
         mg_match(requisicao->uri, mg_str("/api/encomendas"), NULL)
     ) {

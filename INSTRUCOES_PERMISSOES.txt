@@ -1,0 +1,33 @@
+SGE - Permissoes por cargo
+
+ARQUIVOS DESTA ATUALIZACAO
+- backend/src/server.c
+- frontend/script.js
+- frontend/style.css
+- docs/PERMISSOES_CARGOS.md
+
+INSTALACAO
+1. Pare o servidor atual com Ctrl+C.
+2. Extraia o ZIP na raiz da pasta PIM_2 (a mesma que contem backend, frontend e build).
+3. Autorize substituir apenas os arquivos que coincidirem. Nao substitua nem apague a pasta .git.
+4. Execute compilar_sge_corrigido.bat e confira que o codigo de saida e 0.
+5. Depois de compilar com sucesso, execute executar_sge.bat.
+6. Abra http://127.0.0.1:8000 e pressione Ctrl+F5.
+
+PERMISSOES
+- Supervisora, Supervisor ou Administrador: pode cadastrar encomendas, atualizar o status na sequencia, gerenciar funcionarios e ver relatorios.
+- Atendente: pode consultar e cadastrar encomendas, mas nao pode avancar status nem gerenciar funcionarios.
+- Conferente: pode avancar as etapas de triagem (Em triagem e Separada), respeitando a sequencia.
+- Entregador: pode avancar as etapas de distribuicao (Em distribuicao e Entregue), respeitando a sequencia.
+- Administrativo: pode consultar encomendas e ver relatorios, sem cadastro/alteracao de funcionarios ou status.
+
+TESTE RAPIDO
+1. Entre com 001234 (Atendente): deve conseguir cadastrar e consultar encomendas; nao deve ver Funcionarios/Relatorios ou o botao Avancar.
+2. Para acesso de supervisao, entre com a conta de Ana Lima, matricula 004567, caso ainda esteja usando a senha temporaria. No primeiro login, sera necessario trocar a senha.
+3. Como Supervisora, confirme que a tela Funcionarios aparece e que consegue gerenciar contas.
+4. Teste uma encomenda por etapas: Recebida -> Em triagem -> Separada -> Em distribuicao -> Entregue. Uma tentativa de pular etapa deve ser recusada.
+
+OBSERVACOES
+- As verificacoes sao feitas no servidor C; ocultar controles na interface nao e a unica protecao.
+- A API GET /api/funcionarios continua acessivel a usuarios autenticados porque o formulario de encomendas usa essa lista para selecionar responsavel.
+- O projeto e para teste local/academico. Apos conferir tudo, crie um commit no GitHub Desktop e faca Push origin.
