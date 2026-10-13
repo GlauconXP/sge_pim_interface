@@ -263,6 +263,71 @@ static int conectarBanco(void) {
     return 1;
 }
 
+/* Busca o ID pela matrícula antes de alterar um funcionário. */
+static int buscarIdFuncionarioPorMatricula(
+    const SQLWCHAR *matricula,
+    SQLINTEGER *id
+) {
+    SQLHSTMT consulta = SQL_NULL_HSTMT;
+    SQLRETURN resultado;
+    SQLLEN indicadorMatricula = SQL_NTS;
+    SQLLEN indicadorId = 0;
+    *id = 0;
+
+    resultado = SQLAllocHandle(SQL_HANDLE_STMT, conexao, &consulta);
+    if (!SQL_SUCCEEDED(resultado)) {
+        mostrarErro(SQL_HANDLE_DBC, conexao);
+        return 0;
+    }
+
+    SQLCHAR sql[] = "SELECT Id FROM dbo.Funcionarios WHERE Matricula = ?";
+    resultado = SQLPrepare(consulta, sql, SQL_NTS);
+    if (!SQL_SUCCEEDED(resultado)) goto erro_busca_id;
+
+    resultado = SQLBindParameter(
+        consulta, 1, SQL_PARAM_INPUT, SQL_C_WCHAR, SQL_WVARCHAR,
+        20, 0, (SQLPOINTER)matricula,
+        (SQLLEN)(21 * sizeof(SQLWCHAR)), &indicadorMatricula
+    );
+    if (!SQL_SUCCEEDED(resultado)) goto erro_busca_id;
+
+    resultado = SQLExecute(consulta);
+    if (!SQL_SUCCEEDED(resultado)) goto erro_busca_id;
+
+    resultado = SQLFetch(consulta);
+    if (resultado == SQL_NO_DATA) {
+        SQLFreeHandle(SQL_HANDLE_STMT, consulta);
+        return 1;
+    }
+    if (!SQL_SUCCEEDED(resultado)) goto erro_busca_id;
+
+    resultado = SQLGetData(
+        consulta, 1, SQL_C_SLONG, id, sizeof(*id), &indicadorId
+    );
+    if (!SQL_SUCCEEDED(resultado) || indicadorId == SQL_NULL_DATA) {
+        goto erro_busca_id;
+    }
+
+    SQLFreeHandle(SQL_HANDLE_STMT, consulta);
+    return 1;
+
+ erro_busca_id:
+    mostrarErro(SQL_HANDLE_STMT, consulta);
+    SQLFreeHandle(SQL_HANDLE_STMT, consulta);
+    return 0;
+}
+
+/* Revoga imediatamente as sessões do funcionário após editar cargo, situação ou senha. */
+static void invalidarSessoesFuncionario(SQLINTEGER funcionarioId) {
+    if (funcionarioId <= 0) return;
+    for (int i = 0; i < MAX_SESSOES; i++) {
+        if (sessoesSGE[i].token[0] != '\0' &&
+            sessoesSGE[i].funcionarioId == funcionarioId) {
+            memset(&sessoesSGE[i], 0, sizeof(sessoesSGE[i]));
+        }
+    }
+}
+
 /* Adiciona texto à resposta JSON, respeitando o limite do buffer. */
 static int adicionarTexto(
     char *saida, size_t capacidade,
@@ -1182,6 +1247,7 @@ static void atualizarFuncionario(
     SQLHSTMT consulta = SQL_NULL_HSTMT;
     SQLRETURN resultado;
     SQLLEN linhasAfetadas = -1;
+    SQLINTEGER funcionarioAlteradoId = 0;
     struct mg_str corpo = requisicao->body;
     SQLWCHAR matriculaOriginal[21] = {0}, matricula[21] = {0};
     SQLWCHAR nome[101] = {0}, cargo[51] = {0}, setor[51] = {0};
@@ -1221,6 +1287,13 @@ static void atualizarFuncionario(
     if (novaSenha != NULL) mg_free(novaSenha);
     alterarSenha = definirSenha ? 1 : 0;
     ativo = ativoJson ? 1 : 0;
+
+    /* Ao alterar funcionário, identificamos o ID para revogar as sessões existentes. */
+    if (!buscarIdFuncionarioPorMatricula(matriculaOriginal, &funcionarioAlteradoId)) {
+        mg_http_reply(c, 500, "Content-Type: application/json; charset=utf-8\r\n",
+            "{\"erro\":\"Não foi possível validar o funcionário antes da atualização.\"}\n");
+        return;
+    }
 
     resultado = SQLAllocHandle(SQL_HANDLE_STMT, conexao, &consulta);
     if (!SQL_SUCCEEDED(resultado)) {
@@ -1288,6 +1361,7 @@ static void atualizarFuncionario(
             "{\"erro\":\"Funcionário não encontrado.\"}\n");
         return;
     }
+    invalidarSessoesFuncionario(funcionarioAlteradoId);
     mg_http_reply(c, 200, "Content-Type: application/json; charset=utf-8\r\n",
         definirSenha
           ? "{\"mensagem\":\"Funcionário atualizado. A nova senha deverá ser trocada no próximo acesso.\"}\n"

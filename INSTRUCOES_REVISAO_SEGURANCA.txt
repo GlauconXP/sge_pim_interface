@@ -1,0 +1,11 @@
+REVISÃO DE SEGURANÇA — SGE
+
+1. Faça uma cópia de segurança da pasta do projeto.
+2. Pare o servidor com Ctrl+C.
+3. Extraia o ZIP na raiz do projeto PIM_2 e substitua backend/src/server.c.
+4. O documento docs/REVISAO_SEGURANCA_TESTES.md contém a checklist de teste e as limitações conhecidas.
+5. Compile com compilar_sge_corrigido.bat e confirme código de saída 0.
+6. Inicie com executar_sge.bat e execute primeiro o teste de revogação de sessão descrito no documento.
+7. Se ocorrer erro de compilação ou regressão, não faça commit até corrigir.
+
+Observação: o servidor deve permanecer local em 127.0.0.1. Não o exponha à internet.
