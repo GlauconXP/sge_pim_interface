@@ -1,0 +1,13 @@
+SGE - DOCUMENTACAO E PLANO DE TESTES FINAIS
+
+Este pacote contem apenas README.md e arquivos Markdown em docs/.
+Nao contem codigo-fonte, executaveis ou scripts SQL novos.
+
+COMO APLICAR
+1. Faça uma copia da pasta atual do projeto.
+2. Extraia o ZIP diretamente na raiz de PIM_2, a mesma pasta que contem backend, frontend, docs e build.
+3. Autorize a substituição do README.md. Os novos arquivos serão acrescentados dentro de docs/.
+4. Nao apague a pasta .git e nao substitua backend ou frontend com este pacote.
+5. Revise README.md e docs/PLANO_TESTES_FINAL.md antes de considerar a documentação concluida.
+
+A documentação descreve o prototipo conforme as funcionalidades desenvolvidas no projeto. Execute a lista de testes novamente na versao/commit final que será apresentado.
