@@ -24,32 +24,30 @@ Protótipo acadêmico desenvolvido para o Projeto Integrado Multidisciplinar (PI
 | Servidor HTTP | Mongoose | Recebe requisições HTTP e serve os arquivos da interface |
 | Autenticação | Hash com salt e APIs criptográficas do Windows | Proteção das senhas armazenadas |
 
-## Estrutura principal
+## Estrutura do projeto
 
 ```text
 PIM_2/
+├── .git/                         # Histórico do Git (não apagar)
+├── .vscode/                      # Configuração local do IntelliSense
 ├── backend/
-│   ├── src/server.c                 # API, autenticação e regras de negócio
-│   └── third_party/mongoose/        # Biblioteca HTTP usada pelo servidor
+│   ├── examples/                 # Teste independente de conexão ODBC
+│   ├── src/server.c              # Servidor C ativo, API e regras de negócio
+│   └── third_party/mongoose/     # Biblioteca HTTP usada na compilação
 ├── frontend/
-│   ├── index.html                   # Estrutura da interface
-│   ├── style.css                    # Estilos visuais
-│   └── script.js                    # Interações e chamadas à API
-├── docs/
-│   ├── auth_setup.sql               # Colunas e credenciais temporárias de demonstração
-│   ├── seed_funcionarios_demo.sql   # Dados de funcionários demonstrativos
-│   ├── ARQUITETURA.md               # Visão técnica da solução
-│   ├── ENDPOINTS_API.md             # Rotas e responsabilidades
-│   ├── PLANO_TESTES_FINAL.md        # Lista de testes manuais
-│   ├── GUIA_APRESENTACAO.md         # Roteiro de apresentação
-│   └── ESTADO_E_LIMITACOES.md       # Limitações do protótipo
-├── build/                           # Executável gerado ao compilar
-├── compilar_sge_corrigido.bat       # Compila usando o MSYS2 UCRT64
-├── executar_sge.bat                 # Inicia o servidor
+│   ├── index.html                # Estrutura da interface
+│   ├── style.css                 # Aparência
+│   └── script.js                 # Interações e chamadas à API
+├── build/                        # Executável gerado (não é versionado)
+├── docs/                         # Documentação e scripts SQL atuais
+│   └── backup/                   # Códigos e instruções de versões antigas
+├── compilar_sge_corrigido.bat    # Compila o servidor
+├── executar_sge.bat              # Inicia o servidor compilado
+├── .gitignore
 └── README.md
 ```
 
-> A estrutura pode incluir arquivos auxiliares e backups de etapas anteriores. O arquivo ativo do site é `frontend/script.js` e o servidor principal é `backend/src/server.c`.
+**Arquivos ativos:** `backend/src/server.c`, `backend/third_party/mongoose/` e os três arquivos de `frontend/`. As cópias antigas guardadas em `docs/backup/` não devem ser compiladas nem copiadas de volta sobre os arquivos ativos.
 
 ## Requisitos locais
 
@@ -61,15 +59,15 @@ PIM_2/
 
 ## Preparar e iniciar
 
-1. Abra o SQL Server Management Studio (SSMS) e confira se o banco `SGE_Encomendas` e as tabelas `Funcionarios`, `Encomendas` e `Movimentacoes` existem.
-2. Se as colunas de autenticação ainda não foram preparadas, abra `docs/auth_setup.sql` no SSMS e execute o script no banco correto. O script é para a conta de demonstração e não deve substituir credenciais já configuradas.
-3. Abra a pasta principal do projeto no Explorador de Arquivos.
-4. Execute `compilar_sge_corrigido.bat`. Só continue quando mostrar código de saída `0` e `SUCESSO`.
-5. Execute `executar_sge.bat` e mantenha essa janela aberta enquanto usar o sistema.
-6. Abra `http://127.0.0.1:8000` no navegador. Use `Ctrl + F5` após substituir arquivos da interface.
-7. Para parar o servidor, volte à janela de execução e pressione `Ctrl + C`.
+1. Confira se o banco `SGE_Encomendas` e as tabelas `Funcionarios`, `Encomendas` e `Movimentacoes` existem.
+2. Se as colunas de autenticação ainda não foram preparadas, revise `docs/auth_setup.sql` e execute-o no banco correto. Não execute scripts de configuração sem entender o efeito sobre o banco de destino.
+3. Feche o servidor ativo antes de recompilar: na janela dele, pressione `Ctrl+C`.
+4. Na raiz do projeto, execute `compilar_sge_corrigido.bat`. Só continue se aparecer código de saída `0` e `SUCESSO`.
+5. Execute `executar_sge.bat` e mantenha a janela aberta.
+6. No navegador, abra `http://127.0.0.1:8000`. Após atualizar arquivos da interface, pressione `Ctrl+F5`.
+7. Para parar o servidor, volte à janela dele e pressione `Ctrl+C`.
 
-Se o executável estiver aberto, feche o servidor antes de recompilar, pois o Windows pode bloquear a substituição de `build/sge_server.exe`.
+Para os detalhes e para preparar outro computador, consulte [`docs/GUIA_INSTALACAO_LOCAL.md`](docs/GUIA_INSTALACAO_LOCAL.md).
 
 ## Banco de dados
 
@@ -86,6 +84,8 @@ Tabelas principais:
 As regras por cargo são aplicadas na API, não apenas na interface. Consulte [`docs/PERMISSOES_CARGOS.md`](docs/PERMISSOES_CARGOS.md) para a matriz de permissões. Em resumo, a supervisão gerencia funcionários e relatórios; os demais cargos recebem as operações necessárias às suas responsabilidades.
 
 ## Documentação útil
+
+- [`docs/GUIA_INSTALACAO_LOCAL.md`](docs/GUIA_INSTALACAO_LOCAL.md): requisitos, compilação, execução e mudança para outro computador.
 
 - [`docs/ARQUITETURA.md`](docs/ARQUITETURA.md): como as partes conversam.
 - [`docs/ENDPOINTS_API.md`](docs/ENDPOINTS_API.md): visão geral das rotas.
