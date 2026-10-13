@@ -46,6 +46,10 @@ static int podeCadastrarEncomendas(const SessaoSGE *sessao) {
     return podeGerenciarFuncionarios(sessao) || cargoEh(sessao, "Atendente");
 }
 
+static int podeVerRelatorios(const SessaoSGE *sessao) {
+    return podeGerenciarFuncionarios(sessao) || cargoEh(sessao, "Administrativo");
+}
+
 static int podeAvancarPara(const SessaoSGE *sessao, const char *novoStatus) {
     if (podeGerenciarFuncionarios(sessao)) return 1;
     if (cargoEh(sessao, "Conferente")) {
@@ -831,6 +835,101 @@ static void listarEncomendas(struct mg_connection *c) {
 
 
 /* Lista os funcionários cadastrados no SQL Server. */
+/* Indicadores agregados a partir dos dados reais do SQL Server. */
+static void listarIndicadores(struct mg_connection *c) {
+    SQLHSTMT consulta = SQL_NULL_HSTMT;
+    SQLRETURN resultado;
+    SQLINTEGER valores[7] = {0};
+    SQLLEN indicadores[7] = {0};
+    SQLDOUBLE taxaEntrega = 0.0;
+    SQLDOUBLE tempoMedioTriagem = 0.0;
+    SQLLEN indicadorTaxa = 0;
+    SQLLEN indicadorTempo = 0;
+    int temTempoMedio = 0;
+    char json[1024];
+
+    resultado = SQLAllocHandle(SQL_HANDLE_STMT, conexao, &consulta);
+    if (!SQL_SUCCEEDED(resultado)) {
+        mostrarErro(SQL_HANDLE_DBC, conexao);
+        mg_http_reply(c, 500, "Content-Type: application/json; charset=utf-8\r\n",
+            "{\"erro\":\"Não foi possível preparar os indicadores.\"}\n");
+        return;
+    }
+
+    SQLCHAR sql[] =
+        "WITH MovimentosSequenciados AS ("
+        " SELECT EncomendaId, Status, DataHora,"
+        " LEAD(Status) OVER (PARTITION BY EncomendaId ORDER BY DataHora, Id) AS ProximoStatus,"
+        " LEAD(DataHora) OVER (PARTITION BY EncomendaId ORDER BY DataHora, Id) AS ProximaDataHora"
+        " FROM dbo.Movimentacoes"
+        ") "
+        "SELECT "
+        "(SELECT COUNT(*) FROM dbo.Encomendas) AS Total,"
+        "(SELECT COUNT(*) FROM dbo.Encomendas WHERE Status = N'Recebida') AS Recebidas,"
+        "(SELECT COUNT(*) FROM dbo.Encomendas WHERE Status = N'Em triagem') AS EmTriagem,"
+        "(SELECT COUNT(*) FROM dbo.Encomendas WHERE Status = N'Separada') AS Separadas,"
+        "(SELECT COUNT(*) FROM dbo.Encomendas WHERE Status = N'Em distribuição') AS EmDistribuicao,"
+        "(SELECT COUNT(*) FROM dbo.Encomendas WHERE Status = N'Entregue') AS Entregues,"
+        "(SELECT COUNT(*) FROM dbo.Encomendas WHERE Status <> N'Entregue') AS Pendentes,"
+        "CAST(CASE WHEN (SELECT COUNT(*) FROM dbo.Encomendas) = 0 THEN 0.0 "
+        "ELSE 100.0 * (SELECT COUNT(*) FROM dbo.Encomendas WHERE Status = N'Entregue') / "
+        "(SELECT COUNT(*) FROM dbo.Encomendas) END AS FLOAT) AS TaxaEntrega,"
+        "(SELECT AVG(CAST(DATEDIFF(SECOND, ms.DataHora, ms.ProximaDataHora) AS FLOAT) / 60.0) "
+        " FROM MovimentosSequenciados AS ms "
+        " WHERE ms.Status = N'Em triagem' AND ms.ProximoStatus = N'Separada' "
+        " AND ms.ProximaDataHora IS NOT NULL) AS TempoMedioTriagemMinutos";
+
+    resultado = SQLExecDirect(consulta, sql, SQL_NTS);
+    if (!SQL_SUCCEEDED(resultado)) goto erro_indicadores;
+
+    resultado = SQLFetch(consulta);
+    if (!SQL_SUCCEEDED(resultado)) goto erro_indicadores;
+
+    for (SQLUSMALLINT coluna = 1; coluna <= 7; coluna++) {
+        resultado = SQLGetData(consulta, coluna, SQL_C_SLONG,
+            &valores[coluna - 1], sizeof(SQLINTEGER), &indicadores[coluna - 1]);
+        if (!SQL_SUCCEEDED(resultado)) goto erro_indicadores;
+        if (indicadores[coluna - 1] == SQL_NULL_DATA) valores[coluna - 1] = 0;
+    }
+
+    resultado = SQLGetData(consulta, 8, SQL_C_DOUBLE,
+        &taxaEntrega, sizeof(taxaEntrega), &indicadorTaxa);
+    if (!SQL_SUCCEEDED(resultado)) goto erro_indicadores;
+    if (indicadorTaxa == SQL_NULL_DATA) taxaEntrega = 0.0;
+
+    resultado = SQLGetData(consulta, 9, SQL_C_DOUBLE,
+        &tempoMedioTriagem, sizeof(tempoMedioTriagem), &indicadorTempo);
+    if (!SQL_SUCCEEDED(resultado) && resultado != SQL_NO_DATA) goto erro_indicadores;
+    temTempoMedio = SQL_SUCCEEDED(resultado) && indicadorTempo != SQL_NULL_DATA;
+
+    SQLFreeHandle(SQL_HANDLE_STMT, consulta);
+    if (temTempoMedio) {
+        snprintf(json, sizeof(json),
+            "{\"total\":%ld,\"recebidas\":%ld,\"emTriagem\":%ld,"
+            "\"separadas\":%ld,\"emDistribuicao\":%ld,\"entregues\":%ld,"
+            "\"pendentes\":%ld,\"taxaEntrega\":%.1f,\"tempoMedioTriagemMinutos\":%.1f}\n",
+            (long) valores[0], (long) valores[1], (long) valores[2],
+            (long) valores[3], (long) valores[4], (long) valores[5],
+            (long) valores[6], (double) taxaEntrega, (double) tempoMedioTriagem);
+    } else {
+        snprintf(json, sizeof(json),
+            "{\"total\":%ld,\"recebidas\":%ld,\"emTriagem\":%ld,"
+            "\"separadas\":%ld,\"emDistribuicao\":%ld,\"entregues\":%ld,"
+            "\"pendentes\":%ld,\"taxaEntrega\":%.1f,\"tempoMedioTriagemMinutos\":null}\n",
+            (long) valores[0], (long) valores[1], (long) valores[2],
+            (long) valores[3], (long) valores[4], (long) valores[5],
+            (long) valores[6], (double) taxaEntrega);
+    }
+    mg_http_reply(c, 200, "Content-Type: application/json; charset=utf-8\r\n", "%s", json);
+    return;
+
+erro_indicadores:
+    mostrarErro(SQL_HANDLE_STMT, consulta);
+    SQLFreeHandle(SQL_HANDLE_STMT, consulta);
+    mg_http_reply(c, 500, "Content-Type: application/json; charset=utf-8\r\n",
+        "{\"erro\":\"Não foi possível calcular os indicadores. Confira o terminal do servidor.\"}\n");
+}
+
 static void listarFuncionarios(struct mg_connection *c) {
     SQLHSTMT consulta = SQL_NULL_HSTMT;
     SQLRETURN resultado;
@@ -1878,6 +1977,26 @@ static void tratarRequisicao(
             "{\"status\":\"ok\","
             "\"mensagem\":\"Servidor C funcionando!\"}\n"
         );
+    } else if (
+        mg_match(requisicao->uri, mg_str("/api/dashboard"), NULL)
+    ) {
+        if (mg_match(requisicao->method, mg_str("GET"), NULL)) {
+            listarIndicadores(c);
+        } else {
+            mg_http_reply(c, 405, "Content-Type: application/json; charset=utf-8\r\n",
+                "{\"erro\":\"Método não permitido.\"}\n");
+        }
+    } else if (
+        mg_match(requisicao->uri, mg_str("/api/relatorios"), NULL)
+    ) {
+        if (!podeVerRelatorios(sessaoAtual)) {
+            responderAcessoNegado(c);
+        } else if (mg_match(requisicao->method, mg_str("GET"), NULL)) {
+            listarIndicadores(c);
+        } else {
+            mg_http_reply(c, 405, "Content-Type: application/json; charset=utf-8\r\n",
+                "{\"erro\":\"Método não permitido.\"}\n");
+        }
     } else if (
         mg_match(requisicao->uri, mg_str("/api/funcionarios"), NULL)
     ) {

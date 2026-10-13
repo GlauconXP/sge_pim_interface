@@ -1,0 +1,23 @@
+SGE — DASHBOARD E RELATÓRIOS REAIS
+
+ARQUIVOS
+- backend/src/server.c: endpoint GET /api/dashboard e GET /api/relatorios.
+- frontend/script.js, index.html, style.css: cartões e distribuição por status abastecidos por dados reais.
+- docs/RELATORIOS_REAIS.md: explica como as métricas são calculadas.
+
+INSTALAÇÃO
+1. Pare o servidor atual com Ctrl+C.
+2. Extraia o ZIP na raiz do projeto, preservando .git e autorizando substituir os arquivos correspondentes.
+3. Execute compilar_sge_corrigido.bat. A compilação precisa terminar com código 0.
+4. Execute executar_sge.bat e abra http://127.0.0.1:8000.
+5. Pressione Ctrl+F5.
+
+TESTES
+- Entre no sistema e veja os cartões do Dashboard.
+- Cadastre uma encomenda ou avance o status e retorne ao Dashboard para conferir os totais.
+- Entre com perfil Supervisora ou Administrativo e abra Relatórios.
+- Confirme que taxa de entrega, pendentes, tempo médio de triagem e distribuição refletem as tabelas do SQL Server.
+- O tempo médio aparecerá como “Sem dados” quando não houver histórico suficiente de transições Em triagem -> Separada.
+
+IMPORTANTE
+A taxa de entrega significa entregues atualmente / total cadastrado; não mede entregas dentro de um período. O esquema atual não registra prazos de entrega, então o cartão demonstrativo “Atrasadas” foi trocado por “Pendentes”.

@@ -55,10 +55,10 @@
       <section id="page-dashboard" class="page active">
         <div class="page-head"><div><h2>Olá, <span id="greetingName">Funcionário</span>!</h2><p>Resumo das encomendas da unidade.</p></div><button class="btn primary" data-go="cadastro">＋ Nova encomenda</button></div>
         <div class="stats">
-          <article><small>Recebidas</small><strong>128</strong><span>Últimas 24 horas</span></article>
-          <article><small>Em triagem</small><strong>32</strong><span>Precisam de processamento</span></article>
-          <article><small>Em rota</small><strong>81</strong><span>Com distribuição iniciada</span></article>
-          <article><small>Entregues</small><strong>129</strong><span>Concluídas hoje</span></article>
+          <article><small>Recebidas</small><strong id="dashRecebidas">—</strong><span>Status atual</span></article>
+          <article><small>Em triagem</small><strong id="dashEmTriagem">—</strong><span>Aguardando separação</span></article>
+          <article><small>Em rota</small><strong id="dashEmRota">—</strong><span>Separadas ou em distribuição</span></article>
+          <article><small>Entregues</small><strong id="dashEntregues">—</strong><span>Status atual</span></article>
         </div>
         <div class="grid2">
           <article class="card"><div class="card-head"><div><h3>Últimas encomendas</h3><p>Movimentações mais recentes</p></div><button class="link" data-go="encomendas">Ver todas →</button></div><div class="table-wrap"><table><thead><tr><th>Código</th><th>Destinatário</th><th>Destino</th><th>Status</th></tr></thead><tbody id="dashTable"></tbody></table></div></article>
@@ -82,9 +82,10 @@
       </section>
 
       <section id="page-relatorios" class="page">
-        <div class="page-head"><div><h2>Relatórios</h2><p>Indicadores demonstrativos da operação.</p></div><button class="btn secondary" id="refresh">↻ Atualizar</button></div>
-        <div class="report-grid"><article class="card"><small>Taxa de entrega</small><strong id="delivery">86%</strong><span>Concluídas no período</span></article><article class="card"><small>Tempo médio de triagem</small><strong>2h 18min</strong><span>Estimativa operacional</span></article><article class="card"><small>Encomendas atrasadas</small><strong>5</strong><span>Precisam de atenção</span></article></div>
-        <article class="card"><div class="card-head"><div><h3>Distribuição por status</h3><p>Visualização simplificada</p></div></div><div class="bars"><label>Recebida <b>21%</b><i style="width:21%"></i></label><label>Em triagem <b>12%</b><i style="width:12%"></i></label><label>Em distribuição <b>31%</b><i style="width:31%"></i></label><label>Entregue <b>36%</b><i style="width:36%"></i></label></div></article>
+        <div class="page-head"><div><h2>Relatórios</h2><p>Indicadores calculados a partir dos registros do SQL Server.</p></div><button class="btn secondary" id="refresh">↻ Atualizar</button></div>
+        <div class="report-grid"><article class="card"><small>Taxa de entrega</small><strong id="delivery">—</strong><span>Parcela atualmente entregue</span></article><article class="card"><small>Tempo médio em triagem</small><strong id="avgTriage">—</strong><span>Entre “Em triagem” e “Separada”</span></article><article class="card"><small>Pendentes</small><strong id="pendingOrders">—</strong><span>Ainda não entregues</span></article></div>
+        <p id="reportError" class="error" role="status"></p>
+        <article class="card"><div class="card-head"><div><h3>Distribuição por status</h3><p>Quantidade e proporção das encomendas cadastradas</p></div></div><div class="bars" id="statusBars"><p>Os dados serão consultados ao abrir esta tela.</p></div></article>
       </section>
     </main>
   </section>

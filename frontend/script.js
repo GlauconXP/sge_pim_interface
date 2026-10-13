@@ -45,6 +45,86 @@ async function carregarEncomendasDoBanco() {
     priority: "Normal",
   }));
 }
+let indicadoresDashboard = null;
+
+async function buscarIndicadores(endpoint) {
+  const resposta = await fetch(endpoint, { cache: "no-store" });
+  let dados = {};
+  try { dados = await resposta.json(); } catch (_) {}
+  if (!resposta.ok) throw new Error(dados.erro || `Não foi possível carregar os indicadores (HTTP ${resposta.status}).`);
+  return dados;
+}
+
+async function carregarIndicadoresDashboard() {
+  try {
+    indicadoresDashboard = await buscarIndicadores("/api/dashboard");
+    atualizarCartoesDashboard();
+  } catch (erro) {
+    console.error("Erro ao carregar indicadores do dashboard:", erro);
+    indicadoresDashboard = null;
+    atualizarCartoesDashboard();
+  }
+}
+
+function atualizarCartoesDashboard() {
+  const dados = indicadoresDashboard;
+  document.getElementById("dashRecebidas").textContent = dados ? dados.recebidas : "—";
+  document.getElementById("dashEmTriagem").textContent = dados ? dados.emTriagem : "—";
+  document.getElementById("dashEmRota").textContent = dados ? (dados.separadas + dados.emDistribuicao) : "—";
+  document.getElementById("dashEntregues").textContent = dados ? dados.entregues : "—";
+}
+
+function formatarTempoTriagem(minutos) {
+  if (minutos === null || minutos === undefined || !Number.isFinite(Number(minutos))) return "Sem dados";
+  const totalMinutos = Math.max(0, Math.round(Number(minutos)));
+  if (totalMinutos < 60) return `${totalMinutos} min`;
+  const horas = Math.floor(totalMinutos / 60);
+  const resto = totalMinutos % 60;
+  if (horas < 24) return `${horas}h ${resto}min`;
+  const dias = Math.floor(horas / 24);
+  return `${dias}d ${horas % 24}h`;
+}
+
+async function carregarRelatorios() {
+  const taxa = document.getElementById("delivery");
+  const tempo = document.getElementById("avgTriage");
+  const pendentes = document.getElementById("pendingOrders");
+  const barras = document.getElementById("statusBars");
+  const erroElemento = document.getElementById("reportError");
+  taxa.textContent = "…";
+  tempo.textContent = "…";
+  pendentes.textContent = "…";
+  barras.innerHTML = "<p>Consultando dados do banco...</p>";
+  erroElemento.textContent = "";
+
+  try {
+    const dados = await buscarIndicadores("/api/relatorios");
+    taxa.textContent = `${Number(dados.taxaEntrega || 0).toLocaleString("pt-BR", { maximumFractionDigits: 1 })}%`;
+    tempo.textContent = formatarTempoTriagem(dados.tempoMedioTriagemMinutos);
+    pendentes.textContent = String(dados.pendentes ?? 0);
+
+    const total = Number(dados.total || 0);
+    const status = [
+      ["Recebida", Number(dados.recebidas || 0)],
+      ["Em triagem", Number(dados.emTriagem || 0)],
+      ["Separada", Number(dados.separadas || 0)],
+      ["Em distribuição", Number(dados.emDistribuicao || 0)],
+      ["Entregue", Number(dados.entregues || 0)],
+    ];
+    barras.innerHTML = status.map(([nome, quantidade]) => {
+      const percentual = total > 0 ? Math.round((quantidade / total) * 100) : 0;
+      return `<label><span>${escaparHtml(nome)} <small>(${quantidade})</small></span><b>${percentual}%</b><i style="--bar-width:${percentual}%"></i></label>`;
+    }).join("");
+  } catch (erro) {
+    console.error("Erro ao carregar relatórios:", erro);
+    taxa.textContent = "—";
+    tempo.textContent = "—";
+    pendentes.textContent = "—";
+    barras.innerHTML = "";
+    erroElemento.textContent = erro.message || "Não foi possível carregar os relatórios.";
+  }
+}
+
 const statusClass = (s) =>
   ({
     Recebida: "b1",
@@ -116,7 +196,7 @@ function aplicarPermissoes() {
 
 async function entrarNaAplicacao(sessao) {
   try {
-    await Promise.all([carregarEncomendasDoBanco(), carregarFuncionariosDoBanco()]);
+    await Promise.all([carregarEncomendasDoBanco(), carregarFuncionariosDoBanco(), carregarIndicadoresDashboard()]);
     sessaoAtual = sessao;
     aplicarPermissoes();
     login.classList.add("hidden");
@@ -266,6 +346,8 @@ function navigate(p) {
     funcionarios: "Funcionários",
     relatorios: "Relatórios",
   }[p];
+  if (p === "relatorios") carregarRelatorios();
+  if (p === "dashboard") carregarIndicadoresDashboard();
 }
 document
   .querySelectorAll(".nav[data-page]")
@@ -274,11 +356,12 @@ document
   .querySelectorAll("[data-go]")
   .forEach((b) => (b.onclick = () => navigate(b.dataset.go)));
 function renderDash() {
+  atualizarCartoesDashboard();
   document.getElementById("dashTable").innerHTML = orders
     .slice(0, 5)
     .map(
       (o) =>
-        `<tr><td>${o.code}</td><td>${o.recipient}</td><td>${o.destination}</td><td>${badge(o.status)}</td></tr>`,
+        `<tr><td>${escaparHtml(o.code)}</td><td>${escaparHtml(o.recipient)}</td><td>${escaparHtml(o.destination)}</td><td>${badge(o.status)}</td></tr>`,
     )
     .join("");
 }
@@ -396,6 +479,7 @@ async function advance(code) {
 
     // Só atualiza a tela depois que o SQL Server confirmar a alteração.
     await carregarEncomendasDoBanco();
+    await carregarIndicadoresDashboard();
     renderAll();
   } catch (erro) {
     console.error("Erro ao atualizar status:", erro);
@@ -451,6 +535,7 @@ document.getElementById("packageForm").addEventListener("submit", async (e) => {
 
     // Recarrega a lista com os dados confirmados no SQL Server.
     await carregarEncomendasDoBanco();
+    await carregarIndicadoresDashboard();
     renderAll();
     form.reset();
     mensagem.textContent = "Encomenda cadastrada com sucesso no banco de dados.";
@@ -512,9 +597,7 @@ document.getElementById("closeModal").onclick = () =>
   document.getElementById("modal").classList.add("hidden");
 document.querySelector("#modal .backdrop").onclick = () =>
   document.getElementById("modal").classList.add("hidden");
-document.getElementById("refresh").onclick = () =>
-  (document.getElementById("delivery").textContent =
-    82 + Math.floor(Math.random() * 14) + "%");
+document.getElementById("refresh").onclick = () => carregarRelatorios();
 let matriculaOriginalEmEdicao = null;
 
 function abrirModalFuncionario(matricula = null) {
