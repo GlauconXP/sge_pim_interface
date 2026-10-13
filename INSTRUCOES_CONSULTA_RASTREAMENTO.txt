@@ -1,0 +1,28 @@
+SGE — MELHORIAS DE CONSULTA E RASTREAMENTO
+
+ARQUIVOS ATUALIZADOS
+- backend/src/server.c: retorna mais detalhes na lista e adiciona GET /api/encomendas/detalhe?codigo=...
+- frontend/index.html: filtros adicionais para status, tipo de envio e prioridade.
+- frontend/script.js: busca por vários campos, contador, limpar filtros, consulta direta por código e detalhes reais no modal.
+- frontend/style.css: layout dos filtros e modal com rolagem vertical.
+
+INSTALAÇÃO
+1. Pare o servidor com Ctrl+C.
+2. Extraia este ZIP na raiz de PIM_2, autorizando a substituição dos arquivos correspondentes. Preserve .git.
+3. Execute compilar_sge_corrigido.bat e confirme código de saída 0.
+4. Inicie com executar_sge.bat.
+5. Abra http://127.0.0.1:8000 e pressione Ctrl+F5.
+
+TESTES
+1. Entre com um usuário autenticado.
+2. Abra Encomendas: pesquise por código, destinatário, endereço, CEP, bairro, cidade ou responsável.
+3. Use os filtros de status, tipo de envio e prioridade, isolados ou combinados.
+4. Clique Limpar filtros e confirme que toda a lista retornou.
+5. Clique Ver numa encomenda: detalhes completos devem vir do SQL Server e o histórico deve ser consultado separadamente.
+6. Em Ações rápidas > Consultar encomenda, digite o código de uma encomenda. Esse caminho busca diretamente no banco mesmo quando ela não aparece entre as últimas 500 da lista.
+7. Teste um código inexistente: deverá aparecer uma mensagem “Não foi encontrada uma encomenda com esse código”.
+
+OBSERVAÇÃO
+A tabela de consulta lista as até 500 encomendas mais recentes; a consulta direta por código busca qualquer registro no banco. O filtro adicional opera sobre as encomendas carregadas na lista.
+
+Ainda é necessário compilar no Windows e testar com o SQL Server local, porque este ambiente não usa o compilador Windows/ODBC do projeto.

@@ -682,157 +682,214 @@ static void listarEncomendas(struct mg_connection *c) {
     int valido = 1;
     int primeira = 1;
 
-    char json[65536] = {0};
+    /* Limite explícito para manter a resposta leve no protótipo. */
+    char json[524288] = {0};
     size_t posicao = 0;
 
     SQLCHAR codigo[128] = {0};
     SQLCHAR destinatario[256] = {0};
+    SQLCHAR endereco[512] = {0};
+    SQLCHAR cep[32] = {0};
+    SQLCHAR bairro[256] = {0};
     SQLCHAR cidade[128] = {0};
+    SQLCHAR tipo[64] = {0};
     SQLCHAR status[64] = {0};
+    SQLCHAR prioridade[64] = {0};
+    SQLCHAR dataRecebimento[64] = {0};
     SQLCHAR responsavel[256] = {0};
 
     if (!SQL_SUCCEEDED(SQLAllocHandle(
         SQL_HANDLE_STMT, conexao, &consulta
     ))) {
-        mg_http_reply(
-            c, 500, "Content-Type: application/json\r\n",
-            "{\"erro\":\"Falha ao criar consulta\"}\n"
-        );
+        mostrarErro(SQL_HANDLE_DBC, conexao);
+        mg_http_reply(c, 500, "Content-Type: application/json; charset=utf-8\r\n",
+            "{\"erro\":\"Falha ao preparar a consulta de encomendas.\"}\n");
         return;
     }
 
     SQLCHAR sql[] =
-        "SELECT TOP (100) e.Codigo, e.Destinatario, e.Cidade, e.Status, "
-        "f.Nome AS Responsavel "
+        "SELECT TOP (500) e.Codigo, e.Destinatario, COALESCE(e.Endereco, N''), "
+        "COALESCE(e.CEP, N''), COALESCE(e.Bairro, N''), COALESCE(e.Cidade, N''), "
+        "COALESCE(e.TipoEnvio, N''), e.Status, e.Prioridade, "
+        "CONVERT(varchar(19), e.DataRecebimento, 120), COALESCE(f.Nome, N'') "
         "FROM dbo.Encomendas AS e "
         "LEFT JOIN dbo.Funcionarios AS f ON f.Id = e.FuncionarioResponsavelId "
         "ORDER BY e.Id DESC";
 
     resultado = SQLExecDirect(consulta, sql, SQL_NTS);
-
     if (!SQL_SUCCEEDED(resultado)) {
         mostrarErro(SQL_HANDLE_STMT, consulta);
         SQLFreeHandle(SQL_HANDLE_STMT, consulta);
-
-        mg_http_reply(
-            c, 500, "Content-Type: application/json\r\n",
-            "{\"erro\":\"Falha ao consultar encomendas\"}\n"
-        );
+        mg_http_reply(c, 500, "Content-Type: application/json; charset=utf-8\r\n",
+            "{\"erro\":\"Falha ao consultar encomendas.\"}\n");
         return;
     }
 
-    valido = adicionarTexto(
-        json, sizeof(json), &posicao, "["
-    );
-
+    valido = adicionarTexto(json, sizeof(json), &posicao, "[");
     while (valido) {
         resultado = SQLFetch(consulta);
-
-        if (resultado == SQL_NO_DATA) {
-            break;
-        }
-
+        if (resultado == SQL_NO_DATA) break;
         if (!SQL_SUCCEEDED(resultado)) {
             mostrarErro(SQL_HANDLE_STMT, consulta);
             valido = 0;
             break;
         }
 
-        if (!lerColuna(
-                consulta, 1, codigo, sizeof(codigo)) ||
-            !lerColuna(
-                consulta, 2, destinatario, sizeof(destinatario)) ||
-            !lerColuna(
-                consulta, 3, cidade, sizeof(cidade)) ||
-            !lerColuna(
-                consulta, 4, status, sizeof(status)) ||
-            !lerColuna(
-                consulta, 5, responsavel, sizeof(responsavel))) {
+        if (!lerColuna(consulta, 1, codigo, sizeof(codigo)) ||
+            !lerColuna(consulta, 2, destinatario, sizeof(destinatario)) ||
+            !lerColuna(consulta, 3, endereco, sizeof(endereco)) ||
+            !lerColuna(consulta, 4, cep, sizeof(cep)) ||
+            !lerColuna(consulta, 5, bairro, sizeof(bairro)) ||
+            !lerColuna(consulta, 6, cidade, sizeof(cidade)) ||
+            !lerColuna(consulta, 7, tipo, sizeof(tipo)) ||
+            !lerColuna(consulta, 8, status, sizeof(status)) ||
+            !lerColuna(consulta, 9, prioridade, sizeof(prioridade)) ||
+            !lerColuna(consulta, 10, dataRecebimento, sizeof(dataRecebimento)) ||
+            !lerColuna(consulta, 11, responsavel, sizeof(responsavel))) {
             valido = 0;
             break;
         }
 
-        if (!primeira) {
-            valido = adicionarTexto(
-                json, sizeof(json), &posicao, ","
-            );
-        }
-
+        if (!primeira) valido = adicionarTexto(json, sizeof(json), &posicao, ",");
         if (!valido) break;
-
-        valido = adicionarTexto(
-            json, sizeof(json), &posicao,
-            "{\"codigo\":"
-        );
-
-        if (valido) valido = adicionarJson(
-            json, sizeof(json), &posicao, (char *) codigo
-        );
-
-        if (valido) valido = adicionarTexto(
-            json, sizeof(json), &posicao,
-            ",\"destinatario\":"
-        );
-
-        if (valido) valido = adicionarJson(
-            json, sizeof(json), &posicao,
-            (char *) destinatario
-        );
-
-        if (valido) valido = adicionarTexto(
-            json, sizeof(json), &posicao, ",\"cidade\":"
-        );
-
-        if (valido) valido = adicionarJson(
-            json, sizeof(json), &posicao, (char *) cidade
-        );
-
-        if (valido) valido = adicionarTexto(
-            json, sizeof(json), &posicao, ",\"status\":"
-        );
-
-        if (valido) valido = adicionarJson(
-            json, sizeof(json), &posicao, (char *) status
-        );
-
-        if (valido) valido = adicionarTexto(
-            json, sizeof(json), &posicao, ",\"responsavel\":"
-        );
-
-        if (valido) valido = adicionarJson(
-            json, sizeof(json), &posicao, (char *) responsavel
-        );
-
-        if (valido) valido = adicionarTexto(
-            json, sizeof(json), &posicao, "}"
-        );
-
+        valido = adicionarTexto(json, sizeof(json), &posicao, "{\"codigo\":");
+        if (valido) valido = adicionarJson(json, sizeof(json), &posicao, (char *)codigo);
+        if (valido) valido = adicionarTexto(json, sizeof(json), &posicao, ",\"destinatario\":");
+        if (valido) valido = adicionarJson(json, sizeof(json), &posicao, (char *)destinatario);
+        if (valido) valido = adicionarTexto(json, sizeof(json), &posicao, ",\"endereco\":");
+        if (valido) valido = adicionarJson(json, sizeof(json), &posicao, (char *)endereco);
+        if (valido) valido = adicionarTexto(json, sizeof(json), &posicao, ",\"cep\":");
+        if (valido) valido = adicionarJson(json, sizeof(json), &posicao, (char *)cep);
+        if (valido) valido = adicionarTexto(json, sizeof(json), &posicao, ",\"bairro\":");
+        if (valido) valido = adicionarJson(json, sizeof(json), &posicao, (char *)bairro);
+        if (valido) valido = adicionarTexto(json, sizeof(json), &posicao, ",\"cidade\":");
+        if (valido) valido = adicionarJson(json, sizeof(json), &posicao, (char *)cidade);
+        if (valido) valido = adicionarTexto(json, sizeof(json), &posicao, ",\"tipo\":");
+        if (valido) valido = adicionarJson(json, sizeof(json), &posicao, (char *)tipo);
+        if (valido) valido = adicionarTexto(json, sizeof(json), &posicao, ",\"status\":");
+        if (valido) valido = adicionarJson(json, sizeof(json), &posicao, (char *)status);
+        if (valido) valido = adicionarTexto(json, sizeof(json), &posicao, ",\"prioridade\":");
+        if (valido) valido = adicionarJson(json, sizeof(json), &posicao, (char *)prioridade);
+        if (valido) valido = adicionarTexto(json, sizeof(json), &posicao, ",\"dataRecebimento\":");
+        if (valido) valido = adicionarJson(json, sizeof(json), &posicao, (char *)dataRecebimento);
+        if (valido) valido = adicionarTexto(json, sizeof(json), &posicao, ",\"responsavel\":");
+        if (valido) valido = adicionarJson(json, sizeof(json), &posicao, (char *)responsavel);
+        if (valido) valido = adicionarTexto(json, sizeof(json), &posicao, "}");
         primeira = 0;
     }
 
-    if (valido) {
-        valido = adicionarTexto(
-            json, sizeof(json), &posicao, "]"
-        );
-    }
-
+    if (valido) valido = adicionarTexto(json, sizeof(json), &posicao, "]");
     SQLFreeHandle(SQL_HANDLE_STMT, consulta);
-
     if (!valido) {
-        mg_http_reply(
-            c, 500, "Content-Type: application/json\r\n",
-            "{\"erro\":\"Falha ao montar resposta\"}\n"
-        );
+        mg_http_reply(c, 500, "Content-Type: application/json; charset=utf-8\r\n",
+            "{\"erro\":\"A consulta retornou dados demais para montar a resposta.\"}\n");
         return;
     }
 
-    mg_http_reply(
-        c, 200,
-        "Content-Type: application/json; charset=utf-8\r\n",
-        "%s\n", json
-    );
+    mg_http_reply(c, 200,
+        "Content-Type: application/json; charset=utf-8\r\nCache-Control: no-store\r\n",
+        "%s\n", json);
 }
 
+/* Busca os detalhes completos pelo código; funciona mesmo que a encomenda não esteja entre as últimas 500. */
+static void consultarDetalheEncomenda(
+    struct mg_connection *c,
+    struct mg_http_message *requisicao
+) {
+    SQLHSTMT consulta = SQL_NULL_HSTMT;
+    SQLRETURN resultado;
+    char codigoUtf8[128] = {0};
+    SQLWCHAR codigo[128] = {0};
+    SQLLEN tamanhoCodigo = SQL_NTS;
+    SQLCHAR valores[11][512] = {{0}};
+    const size_t capacidades[11] = {
+        128, 256, 512, 32, 256, 128, 64, 64, 64, 64, 256
+    };
+    char json[8192] = {0};
+    size_t posicao = 0;
+    int valido = 1;
+
+    if (mg_http_get_var(&requisicao->query, "codigo", codigoUtf8, sizeof(codigoUtf8)) <= 0 ||
+        codigoUtf8[0] == '\0') {
+        mg_http_reply(c, 400, "Content-Type: application/json; charset=utf-8\r\n",
+            "{\"erro\":\"Informe o código da encomenda.\"}\n");
+        return;
+    }
+    if (MultiByteToWideChar(CP_UTF8, 0, codigoUtf8, -1, (LPWSTR)codigo,
+            (int)(sizeof(codigo) / sizeof(codigo[0]))) <= 0) {
+        mg_http_reply(c, 400, "Content-Type: application/json; charset=utf-8\r\n",
+            "{\"erro\":\"O código informado é inválido.\"}\n");
+        return;
+    }
+    resultado = SQLAllocHandle(SQL_HANDLE_STMT, conexao, &consulta);
+    if (!SQL_SUCCEEDED(resultado)) {
+        mostrarErro(SQL_HANDLE_DBC, conexao);
+        mg_http_reply(c, 500, "Content-Type: application/json; charset=utf-8\r\n",
+            "{\"erro\":\"Falha ao preparar os detalhes da encomenda.\"}\n");
+        return;
+    }
+
+    SQLCHAR sql[] =
+        "SELECT e.Codigo, e.Destinatario, COALESCE(e.Endereco, N''), COALESCE(e.CEP, N''), "
+        "COALESCE(e.Bairro, N''), COALESCE(e.Cidade, N''), COALESCE(e.TipoEnvio, N''), "
+        "e.Status, e.Prioridade, CONVERT(varchar(19), e.DataRecebimento, 120), COALESCE(f.Nome, N'') "
+        "FROM dbo.Encomendas AS e "
+        "LEFT JOIN dbo.Funcionarios AS f ON f.Id = e.FuncionarioResponsavelId "
+        "WHERE e.Codigo = ?";
+    resultado = SQLPrepare(consulta, sql, SQL_NTS);
+    if (!SQL_SUCCEEDED(resultado)) goto erro_detalhe;
+    resultado = SQLBindParameter(consulta, 1, SQL_PARAM_INPUT, SQL_C_WCHAR, SQL_WVARCHAR,
+        30, 0, codigo, sizeof(codigo), &tamanhoCodigo);
+    if (!SQL_SUCCEEDED(resultado)) goto erro_detalhe;
+    resultado = SQLExecute(consulta);
+    if (!SQL_SUCCEEDED(resultado)) goto erro_detalhe;
+    resultado = SQLFetch(consulta);
+    if (resultado == SQL_NO_DATA) {
+        SQLFreeHandle(SQL_HANDLE_STMT, consulta);
+        mg_http_reply(c, 404, "Content-Type: application/json; charset=utf-8\r\n",
+            "{\"erro\":\"Não foi encontrada uma encomenda com esse código.\"}\n");
+        return;
+    }
+    if (!SQL_SUCCEEDED(resultado)) goto erro_detalhe;
+    for (SQLUSMALLINT coluna = 1; coluna <= 11; coluna++) {
+        if (!lerColuna(consulta, coluna, valores[coluna - 1], (SQLLEN)capacidades[coluna - 1])) {
+            valido = 0;
+            break;
+        }
+    }
+    SQLFreeHandle(SQL_HANDLE_STMT, consulta);
+    if (!valido) {
+        mg_http_reply(c, 500, "Content-Type: application/json; charset=utf-8\r\n",
+            "{\"erro\":\"Não foi possível ler todos os detalhes da encomenda.\"}\n");
+        return;
+    }
+
+    valido = adicionarTexto(json, sizeof(json), &posicao, "{\"codigo\":");
+    const char *nomes[11] = {"codigo", "destinatario", "endereco", "cep", "bairro", "cidade", "tipo", "status", "prioridade", "dataRecebimento", "responsavel"};
+    for (int i = 0; valido && i < 11; i++) {
+        if (i > 0) {
+            char chave[64];
+            snprintf(chave, sizeof(chave), ",\"%s\":", nomes[i]);
+            valido = adicionarTexto(json, sizeof(json), &posicao, chave);
+        }
+        if (valido) valido = adicionarJson(json, sizeof(json), &posicao, (char *)valores[i]);
+    }
+    if (valido) valido = adicionarTexto(json, sizeof(json), &posicao, "}");
+    if (!valido) {
+        mg_http_reply(c, 500, "Content-Type: application/json; charset=utf-8\r\n",
+            "{\"erro\":\"Não foi possível montar os detalhes da encomenda.\"}\n");
+        return;
+    }
+    mg_http_reply(c, 200, "Content-Type: application/json; charset=utf-8\r\nCache-Control: no-store\r\n",
+        "%s\n", json);
+    return;
+
+erro_detalhe:
+    mostrarErro(SQL_HANDLE_STMT, consulta);
+    SQLFreeHandle(SQL_HANDLE_STMT, consulta);
+    mg_http_reply(c, 500, "Content-Type: application/json; charset=utf-8\r\n",
+        "{\"erro\":\"Falha ao consultar os detalhes da encomenda. Verifique o terminal.\"}\n");
+}
 
 /* Lista os funcionários cadastrados no SQL Server. */
 /* Indicadores agregados a partir dos dados reais do SQL Server. */
@@ -2014,6 +2071,15 @@ static void tratarRequisicao(
                 c, 405, "Content-Type: application/json; charset=utf-8\r\n",
                 "{\"erro\":\"Método não permitido.\"}\n"
             );
+        }
+    } else if (
+        mg_match(requisicao->uri, mg_str("/api/encomendas/detalhe"), NULL)
+    ) {
+        if (mg_match(requisicao->method, mg_str("GET"), NULL)) {
+            consultarDetalheEncomenda(c, requisicao);
+        } else {
+            mg_http_reply(c, 405, "Content-Type: application/json; charset=utf-8\r\n",
+                "{\"erro\":\"Método não permitido.\"}\n");
         }
     } else if (
         mg_match(requisicao->uri, mg_str("/api/encomendas/historico"), NULL

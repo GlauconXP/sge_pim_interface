@@ -39,10 +39,12 @@ async function carregarEncomendasDoBanco() {
     destination: item.cidade ?? "Não informado",
     status: item.status ?? "Recebida",
     owner: String(item.responsavel ?? "").trim() || "Sem responsável",
-    date: "—",
-    address: "",
-    type: "—",
-    priority: "Normal",
+    date: item.dataRecebimento ?? "",
+    address: item.endereco ?? "",
+    cep: item.cep ?? "",
+    neighborhood: item.bairro ?? "",
+    type: item.tipo ?? "",
+    priority: item.prioridade ?? "Normal",
   }));
 }
 let indicadoresDashboard = null;
@@ -366,30 +368,44 @@ function renderDash() {
     .join("");
 }
 function renderOrders() {
-  const q = document.getElementById("search").value.toLowerCase(),
-    f = document.getElementById("filter").value;
-  const rows = orders.filter(
-    (o) =>
-      (f === "Todos" || o.status === f) &&
-      `${o.code} ${o.recipient} ${o.destination}`.toLowerCase().includes(q),
-  );
+  const q = document.getElementById("search").value.trim().toLocaleLowerCase("pt-BR");
+  const statusFiltro = document.getElementById("filter").value;
+  const tipoFiltro = document.getElementById("typeFilter").value;
+  const prioridadeFiltro = document.getElementById("priorityFilter").value;
+  const normalizar = (valor) => String(valor ?? "").normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLocaleLowerCase("pt-BR");
+  const termo = normalizar(q);
+  const rows = orders.filter((o) => {
+    const texto = normalizar([
+      o.code, o.recipient, o.destination, o.owner, o.address,
+      o.cep, o.neighborhood, o.type, o.priority, o.status,
+    ].join(" "));
+    return (statusFiltro === "Todos" || o.status === statusFiltro) &&
+      (tipoFiltro === "Todos" || o.type === tipoFiltro) &&
+      (prioridadeFiltro === "Todos" || o.priority === prioridadeFiltro) &&
+      (!termo || texto.includes(termo));
+  });
+  const count = document.getElementById("orderCount");
+  count.textContent = `Exibindo ${rows.length} de ${orders.length} encomendas (até as 500 mais recentes).`;
   const permissoes = obterPermissoes();
-  document.getElementById("ordersTable").innerHTML = rows
-    .map((o) => {
-      const indice = flow.indexOf(o.status);
-      const proximoStatus = indice >= 0 ? flow[indice + 1] : null;
-      const podeAvancar = proximoStatus && permissoes.avancarPara(proximoStatus);
-      const acaoStatus = o.status === "Entregue"
-        ? '<button class="link" disabled>Concluída</button>'
-        : podeAvancar
-          ? `<button class="link advance" data-code="${escaparHtml(o.code)}">Avançar</button>`
-          : '<span class="muted-action">Sem permissão para avançar</span>';
-      return `<tr><td>${escaparHtml(o.code)}</td><td>${escaparHtml(o.recipient)}</td><td>${escaparHtml(o.destination)}</td><td>${badge(o.status)}</td><td>${escaparHtml(o.owner)}</td><td><button class="link track" data-code="${escaparHtml(o.code)}">Ver</button> · ${acaoStatus}</td></tr>`;
-    })
-    .join("");
-  document
-    .querySelectorAll(".track")
-    .forEach((b) => (b.onclick = () => openModal(b.dataset.code)));
+  const corpo = document.getElementById("ordersTable");
+  if (rows.length === 0) {
+    corpo.innerHTML = '<tr><td colspan="6" class="empty-state">Nenhuma encomenda corresponde aos filtros. Tente mudar a busca ou limpar os filtros.</td></tr>';
+  } else {
+    corpo.innerHTML = rows
+      .map((o) => {
+        const indice = flow.indexOf(o.status);
+        const proximoStatus = indice >= 0 ? flow[indice + 1] : null;
+        const podeAvancar = proximoStatus && permissoes.avancarPara(proximoStatus);
+        const acaoStatus = o.status === "Entregue"
+          ? '<button class="link" disabled>Concluída</button>'
+          : podeAvancar
+            ? `<button class="link advance" data-code="${escaparHtml(o.code)}">Avançar</button>`
+            : '<span class="muted-action">Sem permissão para avançar</span>';
+        return `<tr><td>${escaparHtml(o.code)}</td><td>${escaparHtml(o.recipient)}</td><td>${escaparHtml(o.destination)}</td><td>${badge(o.status)}</td><td>${escaparHtml(o.owner)}</td><td><button class="link track" data-code="${escaparHtml(o.code)}">Ver</button> · ${acaoStatus}</td></tr>`;
+      })
+      .join("");
+  }
+  document.querySelectorAll(".track").forEach((b) => (b.onclick = () => openModal(b.dataset.code)));
   document.querySelectorAll(".advance").forEach((botao) => {
     botao.onclick = async () => {
       botao.disabled = true;
@@ -438,6 +454,15 @@ function renderAll() {
 }
 document.getElementById("search").oninput = renderOrders;
 document.getElementById("filter").onchange = renderOrders;
+document.getElementById("typeFilter").onchange = renderOrders;
+document.getElementById("priorityFilter").onchange = renderOrders;
+document.getElementById("clearOrderFilters").onclick = () => {
+  document.getElementById("search").value = "";
+  document.getElementById("filter").value = "Todos";
+  document.getElementById("typeFilter").value = "Todos";
+  document.getElementById("priorityFilter").value = "Todos";
+  renderOrders();
+};
 async function advance(code) {
   const encomenda = orders.find((item) => item.code === code);
   if (!encomenda) {
@@ -546,52 +571,86 @@ document.getElementById("packageForm").addEventListener("submit", async (e) => {
   }
 });
 async function openModal(code) {
-  const encomenda = orders.find((item) => item.code === code);
-  if (!encomenda) {
-    alert("Não encontrei essa encomenda na lista.");
+  const codigo = String(code ?? "").trim();
+  if (!codigo) {
+    alert("Informe o código da encomenda para consultar o rastreamento.");
     return;
   }
+  const modal = document.getElementById("modal");
+  document.getElementById("modalCode").textContent = codigo.toUpperCase();
+  document.getElementById("modalBody").innerHTML = '<p>Consultando detalhes da encomenda...</p>';
+  modal.classList.remove("hidden");
 
-  document.getElementById("modalCode").textContent = encomenda.code;
-  document.getElementById("modalBody").innerHTML =
-    `<div class="tracking"><div class="box"><b>Resumo</b><p><b>Destinatário:</b> ${escaparHtml(encomenda.recipient)}</p><p><b>Destino:</b> ${escaparHtml(encomenda.destination)}</p><p><b>Status atual:</b> ${badge(encomenda.status)}</p><p><b>Responsável:</b> ${escaparHtml(encomenda.owner)}</p><p><b>Tipo:</b> ${escaparHtml(encomenda.type)}</p><p><b>Prioridade:</b> ${escaparHtml(encomenda.priority)}</p></div><div class="box"><b>Histórico de movimentações</b><div id="historyContent"><p>Consultando histórico...</p></div></div></div>`;
-  document.getElementById("modal").classList.remove("hidden");
-
-  const conteudoHistorico = document.getElementById("historyContent");
   try {
-    const resposta = await fetch(
-      `/api/encomendas/historico?codigo=${encodeURIComponent(encomenda.code)}`,
+    const respostaDetalhe = await fetch(
+      `/api/encomendas/detalhe?codigo=${encodeURIComponent(codigo)}`,
+      { cache: "no-store" },
     );
-    const dados = await resposta.json();
-
-    if (!resposta.ok) {
-      throw new Error(dados.erro || "Não foi possível consultar o histórico.");
+    const detalhe = await respostaDetalhe.json();
+    if (!respostaDetalhe.ok) {
+      throw new Error(detalhe.erro || "Não foi possível encontrar essa encomenda.");
     }
-    if (!Array.isArray(dados)) {
-      throw new Error("A resposta do histórico é inválida.");
-    }
+    const encomenda = {
+      code: detalhe.codigo ?? codigo,
+      recipient: detalhe.destinatario ?? "Não informado",
+      destination: detalhe.cidade ?? "Não informado",
+      address: detalhe.endereco ?? "",
+      cep: detalhe.cep ?? "",
+      neighborhood: detalhe.bairro ?? "",
+      type: detalhe.tipo ?? "Não informado",
+      status: detalhe.status ?? "Não informado",
+      priority: detalhe.prioridade ?? "Normal",
+      date: detalhe.dataRecebimento ?? "",
+      owner: String(detalhe.responsavel ?? "").trim() || "Sem responsável",
+    };
 
-    if (dados.length === 0) {
-      conteudoHistorico.innerHTML =
-        '<p>Nenhuma movimentação foi registrada para esta encomenda ainda.</p>';
-      return;
-    }
+    document.getElementById("modalCode").textContent = encomenda.code;
+    document.getElementById("modalBody").innerHTML =
+      `<div class="tracking"><div class="box"><b>Resumo da encomenda</b>` +
+      `<p><b>Destinatário:</b> ${escaparHtml(encomenda.recipient)}</p>` +
+      `<p><b>Endereço:</b> ${escaparHtml(encomenda.address || "Não informado")}</p>` +
+      `<p><b>Bairro:</b> ${escaparHtml(encomenda.neighborhood || "Não informado")}</p>` +
+      `<p><b>CEP:</b> ${escaparHtml(encomenda.cep || "Não informado")}</p>` +
+      `<p><b>Cidade:</b> ${escaparHtml(encomenda.destination)}</p>` +
+      `<p><b>Recebida em:</b> ${escaparHtml(encomenda.date || "Não informado")}</p>` +
+      `<p><b>Status atual:</b> ${badge(encomenda.status)}</p>` +
+      `<p><b>Responsável:</b> ${escaparHtml(encomenda.owner)}</p>` +
+      `<p><b>Tipo de envio:</b> ${escaparHtml(encomenda.type || "Não informado")}</p>` +
+      `<p><b>Prioridade:</b> ${escaparHtml(encomenda.priority)}</p></div>` +
+      `<div class="box"><b>Histórico de movimentações</b><div id="historyContent"><p>Consultando histórico...</p></div></div></div>`;
 
-    conteudoHistorico.innerHTML = `<div class="timeline">${dados.map((movimentacao, indice) =>
-      `<div class="${indice === dados.length - 1 ? "current" : "done"}"><span class="dot"></span><p><b>${escaparHtml(movimentacao.status)}</b><br><small>${escaparHtml(movimentacao.dataHora)}</small>${movimentacao.observacao ? `<br><small>${escaparHtml(movimentacao.observacao)}</small>` : ""}</p></div>`,
-    ).join("")}</div>`;
+    const conteudoHistorico = document.getElementById("historyContent");
+    const respostaHistorico = await fetch(
+      `/api/encomendas/historico?codigo=${encodeURIComponent(encomenda.code)}`,
+      { cache: "no-store" },
+    );
+    const historico = await respostaHistorico.json();
+    if (!respostaHistorico.ok) {
+      throw new Error(historico.erro || "Não foi possível consultar o histórico.");
+    }
+    if (!Array.isArray(historico)) throw new Error("A resposta do histórico é inválida.");
+    if (historico.length === 0) {
+      conteudoHistorico.innerHTML = '<p>Nenhuma movimentação foi registrada para esta encomenda ainda.</p>';
+    } else {
+      conteudoHistorico.innerHTML = `<div class="timeline">${historico.map((movimentacao, indice) =>
+        `<div class="${indice === historico.length - 1 ? "current" : "done"}"><span class="dot"></span><p><b>${escaparHtml(movimentacao.status)}</b><br><small>${escaparHtml(movimentacao.dataHora)}</small>${movimentacao.observacao ? `<br><small>${escaparHtml(movimentacao.observacao)}</small>` : ""}</p></div>`,
+      ).join("")}</div>`;
+    }
   } catch (erro) {
-    console.error("Erro ao carregar histórico:", erro);
-    conteudoHistorico.innerHTML = `<p class="error">${escaparHtml(erro.message || "Erro ao consultar o histórico.")}</p>`;
+    console.error("Erro ao consultar encomenda:", erro);
+    document.getElementById("modalBody").innerHTML =
+      `<p class="error">${escaparHtml(erro.message || "Erro ao consultar a encomenda.")}</p>`;
   }
 }
 
 document.getElementById("quickTrack").onclick = () => {
-  if (orders.length === 0) {
-    alert("Não há encomendas cadastradas para consultar.");
+  const codigo = window.prompt("Digite o código da encomenda que deseja consultar:");
+  if (codigo === null) return;
+  if (!codigo.trim()) {
+    alert("Digite um código para consultar o rastreamento.");
     return;
   }
-  openModal(orders[0].code);
+  openModal(codigo.trim());
 };
 document.getElementById("closeModal").onclick = () =>
   document.getElementById("modal").classList.add("hidden");
